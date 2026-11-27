@@ -2,6 +2,7 @@
 // Usage: node bot.mjs <url>. Exits 1 when the page could not be loaded; robot.json is written either way.
 import { appendFileSync, writeFileSync } from 'node:fs';
 import { chromium } from 'playwright';
+import { isLockBlock } from './netlock.mjs';
 
 const OUT = process.env.PD_OUT || '/out';
 const url = process.argv[2];
@@ -27,9 +28,10 @@ context.on('request', (request) => log('network', {
   method: request.method(), url: request.url(), host: hostOf(request.url()),
   resourceType: request.resourceType(), postData: request.postData()?.slice(0, 4096) ?? null,
 }));
-context.on('requestfailed', (request) => log('blocked', {
-  url: request.url(), host: hostOf(request.url()), error: request.failure()?.errorText ?? '',
-}));
+context.on('requestfailed', (request) => {
+  const error = request.failure()?.errorText ?? '';
+  log(isLockBlock(request.url(), error) ? 'blocked' : 'failed', { url: request.url(), host: hostOf(request.url()), error });
+});
 page.on('framenavigated', (frame) => {
   if (frame === page.mainFrame()) log('navigations', { url: frame.url() });
 });
