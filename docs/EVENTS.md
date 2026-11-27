@@ -7,6 +7,7 @@ Every SSE message is `{"id": <event id>, "ts": <ISO 8601>, "type": "<type>", "pa
 | Type | Emitted by | Payload |
 |---|---|---|
 | `scan_started` | A | `{url, mode, decoy_email}` |
+| `email_triage` | B | `{links: [{url, shown_text, picked, reason}], flags: [{name, detail}]}` (pasted email, SPEC 11A.6; `picked` links get one investigation each; flags are context: `link_text_mismatch`, `display_name_mismatch`, `reply_to_differs`) |
 | `scan_queued` | A | `{position}` (waiting for a free slot, SPEC 10) |
 | `plan` | B | `{hypotheses: [{id, text, status: "open"}], text}` (`text`: one first-person sentence) |
 | `hypothesis_update` | B | `{id, status: "open", "supported" or "refuted", reason, evidence: [cite]}` |

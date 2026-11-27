@@ -184,8 +184,11 @@ def victim_visit(scan_id: str, url: str, scan_dir: pathlib.Path, decoy: dict, vi
 
         def exec_local(container: str, args: list[str], timeout: int = 30) -> tuple[int, str]:
             args = [a.replace("/out/", f"{out}/") if a.startswith("/out/") else a for a in args]
-            r = subprocess.run([args[0], "--session", session, *args[1:]], capture_output=True, text=True,
-                               timeout=timeout)
+            try:
+                r = subprocess.run([args[0], "--session", session, *args[1:]], capture_output=True, text=True,
+                                   timeout=timeout)
+            except subprocess.TimeoutExpired:
+                return 124, f"timed out after {timeout} s"
             return r.returncode, r.stdout + (r.stderr if r.returncode else "")
 
         agent._exec = exec_local
