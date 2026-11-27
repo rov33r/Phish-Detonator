@@ -279,3 +279,37 @@ def test_analyst_can_override_a_real_scan(client, monkeypatch):
     assert r.status_code == 200 and store["real1"]["decision"] == "release" and store["real1"]["decided_by"] == "analyst"
     assert events == [("decision", {"decision": "release", "decided_by": "analyst"})]
     assert client.post("/api/scans/cap1/decision", json={"decision": "block"}).status_code == 404
+
+
+def test_analyst_approves_a_waiting_submit(client, monkeypatch):
+    from app import agent, db
+    store = {"real1": {"verdict": None}, "cap1": {"capture_only": True}}
+    monkeypatch.setattr(db, "get_scan", lambda sid: store.get(sid))
+    answers = []
+    monkeypatch.setattr(agent, "answer", lambda sid, visit, d: answers.append((sid, visit, d)) or visit == "victim")
+    r = client.post("/api/scans/real1/approve", json={"visit": "victim", "decision": "approve"})
+    assert r.status_code == 200 and r.json() == {"visit": "victim", "decision": "approve"}
+    assert answers == [("real1", "victim", "approve")]
+    assert client.post("/api/scans/real1/approve", json={"visit": "robot", "decision": "deny"}).status_code == 409
+    assert client.post("/api/scans/nope/approve", json={"visit": "victim", "decision": "deny"}).status_code == 404
+    assert client.post("/api/scans/cap1/approve", json={"visit": "victim", "decision": "deny"}).status_code == 404
+    assert client.post("/api/scans/real1/approve", json={"visit": "victim", "decision": "maybe"}).status_code == 422
+
+
+def test_approve_endpoint_reaches_the_waiting_agent(client, monkeypatch):
+    """End to end in one process: the endpoint wakes the agent thread that is waiting."""
+    import threading
+    from app import agent, db
+    monkeypatch.setattr(db, "get_scan", lambda sid: {"verdict": None})
+    monkeypatch.setattr(agent, "_emit", lambda *a: None)
+    result = {}
+    t = threading.Thread(target=lambda: result.update(d=agent.ask_analyst("live1", "victim", 5, "http://x.test/login",
+                                                                          [agent.EMAIL, agent.PASSWORD])))
+    t.start()
+    for _ in range(200):
+        if agent.pending("live1"):
+            break
+        threading.Event().wait(0.01)
+    assert client.post("/api/scans/live1/approve", json={"visit": "victim", "decision": "deny"}).status_code == 200
+    t.join(2)
+    assert result["d"] == "denied_by_analyst" and agent.pending("live1") == []

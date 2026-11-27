@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse, PlainTextResponse, Response, Streami
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, HttpUrl
 
-from app import db, orchestrator, scoreboard
+from app import agent, db, orchestrator, scoreboard
 from app.email_intake import extract_links, flags
 
 ROOT = Path(__file__).resolve().parent
@@ -262,6 +262,11 @@ async def email_preview(body: EmailPreviewInput):
 
 class DecisionInput(BaseModel):
     decision: Literal["block", "release"]
+
+
+class ApprovalInput(BaseModel):
+    visit: str = Field(min_length=1, max_length=64)
+    decision: Literal["approve", "deny"]
 
 
 def demo_scan(request, scan_id):
@@ -515,6 +520,17 @@ async def scan_events(scan_id: str, request: Request, after: int = 0):
             events = replay_recording(history, cursor)
     return StreamingResponse(events, media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@app.post("/api/scans/{scan_id}/approve")
+async def approve(scan_id: str, body: ApprovalInput):
+    """The analyst answers an approval_requested before the agent's submit (SPEC 6.6 manual mode)."""
+    record = await asyncio.to_thread(db.get_scan, scan_id)
+    if record is None or record.get("capture_only"):
+        raise HTTPException(404, "Scan not found")
+    if not agent.answer(scan_id, body.visit, body.decision):
+        raise HTTPException(409, "Nothing is waiting for approval in this visit")
+    return {"visit": body.visit, "decision": body.decision}
 
 
 @app.post("/api/scans/{scan_id}/decision")
