@@ -356,6 +356,15 @@ def live_presets() -> dict[str, str]:
             "bomb": f"{kit}/bomb", "inject": f"{kit}/x/"}
 
 
+ALWAYS_SCAN = ("legit", "bomb", "inject")  # demo links that run even when blocked; kit and mobile show the refusal
+
+
+def always_scans(url: str) -> bool:
+    live = live_presets()
+    exempt = {preset[name] for preset in (PRESETS, live) for name in ALWAYS_SCAN if name in preset}
+    return blocklist.normalize(url) in {blocklist.normalize(link) for link in exempt}
+
+
 def orchestrator_enabled(url: str) -> bool:
     """Full investigation (victim browser, decoy identity) only for owned fixture hosts and hosts in
     PD_ACTIVE_SCAN_HOSTS; `*` allows every link. Everything else gets a sandboxed robot capture."""
@@ -420,7 +429,7 @@ async def start_scan(body: ScanInput, request: Request):
         raise HTTPException(503, "Simulated scans are disabled")
     known = (state.demo_blocklist.get(blocklist.normalize(url)) if demo
              else await asyncio.to_thread(blocklist.lookup, url))
-    if known and known["status"] == "blocked":  # a blocked link is not opened again until it is unblocked
+    if known and known["status"] == "blocked" and not always_scans(url):  # refused until unblocked
         raise HTTPException(409, {"message": "This link is on the blocklist. Unblock it to scan it again.",
                                   "blocklist": known})
     scan_id = uuid4().hex
