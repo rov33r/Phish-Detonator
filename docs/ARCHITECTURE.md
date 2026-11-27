@@ -36,7 +36,6 @@ flowchart TB
     inv -->|OpenAI-compatible API| vsi[["Vultr Serverless Inference<br/>agent: mimo-v2.6-pro<br/>vision + fallback: qwen3.8-flash-next"]]
     agent --> vsi
     verdict -->|brand check| vsi
-    orch -->|evidence bundle| s3[["Vultr Object Storage"]]
 
     victim -->|public internet only| web((Suspicious link))
     victim -.->|blocked by iptables| lan["cloud metadata, host, private ranges"]
@@ -58,6 +57,8 @@ sequenceDiagram
         I->>V: visit like a person, submit a decoy identity
     end
     R-->>I: what the scanner saw
+    V->>A: approval request before the decoy submit (manual mode)
+    A-->>V: approve or deny (no answer in 30 s: code policy decides)
     V-->>I: steps, screenshots, where the decoy went
     loop Agent decides (budget: 5 sandboxes, 240 s)
         I->>I: update hypotheses with cited evidence
@@ -75,6 +76,7 @@ sequenceDiagram
 | Plan | Writes the plan, may add a hypothesis H5 | Fixes H1 to H4 so every case tests the same questions |
 | Explore | Chooses the next visit from a fixed menu with a first-person reason | Validates the tool and its arguments, enforces the sandbox and time budget |
 | Victim visit | Picks every click and field from the page snapshot | Allows only refs from the latest snapshot and only decoy placeholders as text; the approval gate checks every submit |
+| Submit the decoy | Pauses and asks before its one irreversible action | Policy checks first; in manual mode the analyst approves or denies on screen |
 | Conclude | Writes claims with citations, proposes block or none | Rejects any claim whose citation does not show the claimed signal; the verdict comes from signals code computed |
 | Argue against itself | | Refutes or supports H4 "this is a legitimate login" by checking each credential destination: same site, brand-owned, known login provider |
 | Act | Blocks the link on phishing | Allows the block only when H4 is refuted |
@@ -92,7 +94,7 @@ Phishing needs a combination: the decoy password reached a third party (S1) and 
 | Resource limits | 2 GB memory, 2 CPUs, 512 processes and 120 s wall clock per visit; 5 sandboxes and 240 s per investigation; global caps and a per-IP rate limit on the public URL. |
 | Lifecycle | One container per visit, removed in a `finally` block; a backstop timer ends any container a crashed app leaves behind. |
 | Network | iptables rejects private, link-local, cloud metadata and host addresses from the sandbox network; blocked attempts are logged and shown on screen. |
-| Verifiable output | Every claim cites an evidence file line; code verifies each citation; the evidence bundle is hashed and signed. |
+| Verifiable output | Every claim cites an evidence file line; code verifies each citation and rejects any claim the evidence does not show. |
 | Untrusted content | Page text reaches the model only inside `<untrusted_page>` tags; model output is validated JSON and never reaches a shell. |
 
 ## Vultr products
@@ -101,7 +103,6 @@ Phishing needs a combination: the decoy password reached a third party (S1) and 
 |---|---|
 | Cloud Compute (Stockholm) | Hosts the app, Docker with gVisor, the sandboxes and the test sites |
 | Serverless Inference | Every model call: investigator, victim agent, vision brand check. Models chosen by a 40-call structured-output benchmark: `mimo-v2.6-pro` (10/10 correct, no repairs), `qwen3.8-flash-next` as vision model and fallback |
-| Object Storage | Evidence bundles with presigned links |
 | Firewall Group | Inbound 22 (team), 80 and 443 only |
 
 ## Measured reliability (laptop runs, real Vultr model)
