@@ -1,12 +1,12 @@
 <!doctype html>
-<html lang="en" data-theme="dark">
+<html lang="en" data-theme="light">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Phish Detonator | Link investigation</title>
   <script>
     try {
-      if (localStorage.getItem("phishdet-theme") === "light") document.documentElement.dataset.theme = "light";
+      if (localStorage.getItem("phishdet-theme") === "dark") document.documentElement.dataset.theme = "dark";
     } catch {}
   </script>
   <link rel="stylesheet" href="/static/app.css">
@@ -60,6 +60,13 @@
             <li data-phase="verdict">Review findings</li>
           </ol>
           <div class="workspace">
+            <section class="surface approval-stage" id="approval-stage" aria-labelledby="approval-heading" hidden>
+              <h2 id="approval-heading">Your approval</h2>
+              <div class="section-body">
+                <div id="approvals" aria-live="polite"></div>
+                <ul class="clean rows" id="approval-outcomes" aria-label="Approval outcomes" hidden></ul>
+              </div>
+            </section>
             <section class="surface comparison live-investigation" aria-labelledby="comparison-heading">
               <h2 id="comparison-heading">Browser comparison</h2>
               <div class="section-head comparison-head">
