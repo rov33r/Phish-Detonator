@@ -22,8 +22,9 @@ INTERFACES = {
     "app.db": ["emit", "update_scan"],
     "app.sandbox": ["start_visit", "exec_in", "stop_visit", "out_dir"],
     "app.agent": ["run_victim"],
+    "app.investigator": ["plan", "next_step"],
     "app.verdict": ["decide"],
-    "app.orchestrator": ["run_scan"],
+    "app.orchestrator": ["run_scan", "dispatch"],
 }
 
 

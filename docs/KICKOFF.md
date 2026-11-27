@@ -76,7 +76,7 @@ Pass: snapshot prints elements with refs, `navigator.webdriver` is `false`. Fail
 ## 6. First Prompt for Lane A (paste into Claude Code)
 
 ```
-Read CLAUDE.md, then docs/SPEC.md sections 4, 5, 13 and 16.
+Read CLAUDE.md, then docs/SPEC.md sections 4, 5, 6A.2, 6A.4, 13 and 16.
 1. Create app/db.py, app/config.py and the interface stubs from CLAUDE.md section 7. Open a PR and merge it first, so lanes B and C can build on it.
 2. Build sandbox/Dockerfile from reference/spike/Dockerfile: non-root user pd (uid 10001),
    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright, agent-browser with Chrome readable by pd.
@@ -89,9 +89,10 @@ Stop after acceptance tests A1, A7 and A8 pass and show the output.
 ## 7. First Prompt for Lane B (paste into Claude Code)
 
 ```
-Read CLAUDE.md, then docs/SPEC.md sections 6, 8, 9, 10 and 11.
+Read CLAUDE.md, then docs/SPEC.md sections 6, 6A, 8, 9 and 10, and docs/EVENTS.md.
 Wait for the interface stubs on main (CLAUDE.md section 7), then:
-1. Build fixtures/app.py: legit Vexalo site, 4-stage phishing kit, /news, collector, /botd (SPEC 9).
+1. Build fixtures/app.py: legit Vexalo site, phishing kit (all 5 stages, landing bot check,
+   collector CORS, mobile-only variant /m/), /news, collector, /botd (SPEC 9).
    Route by Host header. Run locally on port 8081.
 2. Build app/llm.py (OpenAI SDK, Vultr base URL, JSON parse with one repair retry).
 3. Build app/agent.py (SPEC 6) using sandbox.exec_in. Test against the kit with a local runc container.
@@ -115,6 +116,6 @@ Stop when a fake scan plays end to end in the browser; show a screenshot.
 
 ## 8. Second Prompts (after the first stop)
 
-- **Lane A:** orchestrator (parallel visits, cleanup in finally), Object Storage upload with presigned links, Caddyfile and systemd units, deploy to the VM. Target: public URL by 15:00.
-- **Lane B:** brand check (SPEC 8.3), agent auto-block on Scam with cited evidence, `/api/scoreboard` job (A9), tune the prompt until A2 passes 3 of 3.
-- **Lane C:** swap the fake scan for `orchestrator.run_scan`, scoreboard page, demo presets, polish, README, architecture diagram, video.
+- **Lane A:** orchestrator (round 1 in parallel, `dispatch` for investigator tools, profiles incl. `victim_mobile`, cleanup in finally), caps and rate limit (SPEC 10), Object Storage, Caddyfile and systemd units, deploy to the VM. Target: public URL by 15:00 (A7, A8, A12, A14).
+- **Lane B:** investigator (SPEC 6A), claim checks (SPEC 8.4), vision brand check (8.3), `/api/scoreboard` job (A9); tune prompts until A2 and A11 pass 3 of 3 (A13 as a unit test).
+- **Lane C:** investigation board, containment panel, swap the fake scan for `orchestrator.run_scan`, scoreboard page, three demo presets, polish, README, architecture diagram, video.
