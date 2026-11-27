@@ -35,6 +35,7 @@ let source;
 let lastEvent = 0;
 let startTime;
 let activeResult;
+let playback = false;
 
 function status(text, state) {
   byId("status").textContent = text;
@@ -274,6 +275,7 @@ function renderEmailTriage({ links, flags }) {
 
 const render = {
   scan_started(event, p) {
+    if (playback && p.url) byId("submitted-url").textContent = p.url;
     byId("email").textContent = p.decoy_email;
     byId("password").textContent = "••••••••••••••••";
     activity(event, "Scan started", p.url);
@@ -436,7 +438,7 @@ const render = {
       byId("untested").hidden = false;
       byId("untested").textContent = `Untested · ${p.untested.join(", ")}`;
     }
-    byId("decisions").hidden = false;
+    byId("decisions").hidden = playback;
     if (p.action_taken === "blocked") recordDecision({ decision: "block", decided_by: p.decided_by });
     else byId("decision").textContent = "No automatic action taken.";
     activity(event, "Verdict reached", label);
@@ -511,46 +513,70 @@ for (const button of presets) {
 }
 urlInput.addEventListener("input", selectPreset);
 
-form.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  if (startButton.disabled) return;
+function openExchange(submitted, recording = false) {
   reset();
+  playback = recording;
   byId("welcome").hidden = true;
   byId("active-exchange").hidden = false;
-  byId("submitted-url").textContent = urlInput.value;
+  byId("submitted-url").textContent = submitted;
   byId("active-exchange").scrollIntoView({ block: "start" });
   startLoading();
   startButton.disabled = true;
-  startButton.textContent = "Scanning…";
-  status("Starting investigation", "running");
+  startButton.textContent = recording ? "Replaying…" : "Scanning…";
+  status(recording ? "Opening recording" : "Starting investigation", "running");
+}
+
+function connectScan(id) {
+  scanId = id;
+  byId("case-id").textContent = `Scan ${scanId.slice(0, 8)}`;
+  const stream = new EventSource(`/api/scans/${scanId}/events`);
+  source = stream;
+  let failures = 0;
+  stream.onopen = () => status(playback ? "Playing recorded investigation" : "Investigation running", "running");
+  stream.onmessage = ({ data }) => {
+    failures = 0;
+    const entry = JSON.parse(data);
+    if (entry.id <= lastEvent) return;
+    if (!lastEvent) startTime = Date.parse(entry.ts);
+    lastEvent = entry.id;
+    render[entry.type]?.(entry, entry.payload);
+  };
+  stream.onerror = () => {
+    failures += 1;
+    if (stream.readyState === EventSource.CLOSED || failures >= 3) {
+      stop("The event stream ended early. Start the scan again to retry.", "error");
+    } else {
+      status("Reconnecting to the investigation…", "running");
+    }
+  };
+}
+
+form.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (startButton.disabled) return;
+  openExchange(urlInput.value);
   try {
     const result = await post("/api/scans", Object.fromEntries(new FormData(form)));
-    scanId = result.scan_id;
-    byId("case-id").textContent = `Scan ${scanId.slice(0, 8)}`;
-    const stream = new EventSource(`/api/scans/${scanId}/events`);
-    source = stream;
-    let failures = 0;
-    stream.onopen = () => status("Investigation running", "running");
-    stream.onmessage = ({ data }) => {
-      failures = 0;
-      const entry = JSON.parse(data);
-      if (entry.id <= lastEvent) return;
-      if (!lastEvent) startTime = Date.parse(entry.ts);
-      lastEvent = entry.id;
-      render[entry.type]?.(entry, entry.payload);
-    };
-    stream.onerror = () => {
-      failures += 1;
-      if (stream.readyState === EventSource.CLOSED || failures >= 3) {
-        stop("The event stream ended early. Start the scan again to retry.", "error");
-      } else {
-        status("Reconnecting to the investigation…", "running");
-      }
-    };
+    connectScan(result.scan_id);
   } catch (error) {
     stop(error.message, "error");
   }
 });
+
+const replayRoute = location.pathname.match(/^\/replay\/([a-zA-Z0-9_-]{1,80})$/);
+if (replayRoute) {
+  openExchange("Recorded investigation", true);
+  connectScan(replayRoute[1]);
+  const replayId = scanId;
+  fetch(evidenceUrl("robot/robot.json"))
+    .then((response) => response.ok ? response.json() : null)
+    .then((record) => {
+      if (!record || scanId !== replayId) return;
+      byId("robot-url").textContent = record.final_url ?? "Scanner capture";
+      capture("robot", "robot/final.png", `Scanner capture showing ${record.title ?? "the page"}`);
+    })
+    .catch(() => {});
+}
 
 document.addEventListener("click", async (event) => {
   const button = event.target.closest("[data-decision]");
@@ -570,10 +596,35 @@ document.addEventListener("click", async (event) => {
 
 fetch("/api/health")
   .then((response) => response.json())
-  .then(({ demo }) => {
-    if (!demo && !scanId && !startButton.disabled) status("Simulated scans are disabled", "error");
+  .then(({ demo, recordings }) => {
+    const group = byId("recorded-runs");
+    const names = { kit: "Phishing kit", mobile: "Mobile-only kit", legit: "Legit Vexalo", inject: "Prompt injection" };
+    for (const [key, id] of Object.entries(recordings ?? {})) {
+      const link = element("a", names[key] ?? key);
+      link.href = `/replay/${encodeURIComponent(id)}`;
+      group.append(link);
+    }
+    group.hidden = !group.querySelector("a");
+    if (!demo && !scanId) byId("environment").textContent = "Recorded investigations";
   })
   .catch(() => status("Could not check service status", "error"));
+
+byId("scoreboard").addEventListener("toggle", async (event) => {
+  if (!event.currentTarget.open) return;
+  const summary = byId("scoreboard-result");
+  summary.textContent = "Loading saved result…";
+  try {
+    const response = await fetch("/api/scoreboard");
+    if (!response.ok) throw new Error();
+    const result = await response.json();
+    const bot = (profile) => profile?.bot === true ? "true" : profile?.bot === false ? "false" : "unavailable";
+    summary.textContent = result
+      ? `Scanner bot: ${bot(result.robot)} · Victim bot: ${bot(result.victim)}`
+      : "No saved scoreboard result.";
+  } catch {
+    summary.textContent = "Could not load the saved scoreboard.";
+  }
+});
 
 byId("email-form").addEventListener("submit", async (event) => {
   event.preventDefault();

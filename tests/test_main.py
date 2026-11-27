@@ -105,3 +105,86 @@ def test_legitimate_submission_is_not_a_third_party_destination(client):
     events = read_events(client.get(f"/api/scans/{scan['scan_id']}/events"))
     assert any(event["type"] == "decoy_sent" for event in events)
     assert events[-1]["payload"]["password_sent_to"] == []
+
+
+def test_stored_scan_stream_and_public_record(client):
+    from app import db
+
+    db.update_scan("scan-db", url="https://test.example/", status="finished",
+                   client_ip="127.0.0.1", decoy_password="do-not-publish")
+    db.emit("scan-db", "plan", {"text": "First event"})
+    db.emit("scan-db", "verdict", {"verdict": "Phishing"})
+    path = "/api/scans/scan-db"
+    assert client.get(path).json() == {
+        "id": "scan-db", "url": "https://test.example/", "status": "finished",
+    }
+    events = read_events(client.get(f"{path}/events"))
+    assert [event["type"] for event in events] == ["plan", "verdict"]
+    replay = client.get(f"{path}/events", headers={"Last-Event-ID": str(events[0]["id"])})
+    assert read_events(replay) == events[1:]
+
+
+@pytest.mark.parametrize(("scan_id", "verdict"), [
+    ("dev-kit-161e89", "Phishing"), ("dev-mobile-80d800", "Phishing"),
+    ("dev-inject-e9ec6b", "Phishing"), ("dev-legit-f1af13", "No evidence found"),
+])
+def test_recorded_runs_and_evidence(client, monkeypatch, scan_id, verdict):
+    monkeypatch.setenv("PD_SCANS_DIR", "fixtures/recordings")
+    path = f"/api/scans/{scan_id}"
+    assert client.get(f"/replay/{scan_id}").status_code == 200
+    assert client.get(path).json()["verdict"] == verdict
+    events = read_events(client.get(f"{path}/events"))
+    assert events[0]["type"] == "scan_started"
+    assert events[-1]["payload"]["verdict"] == verdict
+    evidence = client.get(f"{path}/files/robot/final.png")
+    assert evidence.content.startswith(b"\x89PNG")
+    assert client.get(f"{path}/files/decoy.json").status_code == 404
+    assert client.get(f"{path}/files/robot/%2e%2e/decoy.json").status_code == 404
+
+
+def test_saved_scoreboard(client, monkeypatch, tmp_path):
+    monkeypatch.setenv("PD_SCANS_DIR", str(tmp_path))
+    assert client.get("/api/scoreboard").json() is None
+    (tmp_path / "scoreboard.json").write_text('{"robot":{"bot":true},"victim":{"bot":false}}')
+    assert client.get("/api/scoreboard").json() == {
+        "robot": {"bot": True}, "victim": {"bot": False},
+    }
+
+
+def test_persisted_stream_receives_live_event_and_unsubscribes(monkeypatch):
+    import asyncio
+    from threading import Event
+
+    from app import db
+    from app.main import stream_persisted
+
+    subscribed = Event()
+    real_subscribe = db.subscribe
+    real_unsubscribe = db.unsubscribe
+    listeners = set()
+
+    def subscribe(listener):
+        real_subscribe(listener)
+        listeners.add(listener)
+        subscribed.set()
+
+    def unsubscribe(listener):
+        real_unsubscribe(listener)
+        listeners.remove(listener)
+
+    monkeypatch.setattr(db, "subscribe", subscribe)
+    monkeypatch.setattr(db, "unsubscribe", unsubscribe)
+    db.update_scan("live-db", status="running")
+
+    async def verify():
+        stream = stream_persisted("live-db", 0)
+        try:
+            next_event = asyncio.create_task(anext(stream))
+            assert await asyncio.to_thread(subscribed.wait, 2)
+            await asyncio.to_thread(db.emit, "live-db", "plan", {"text": "Live event"})
+            assert "Live event" in await asyncio.wait_for(next_event, timeout=2)
+        finally:
+            await stream.aclose()
+
+    asyncio.run(verify())
+    assert not listeners

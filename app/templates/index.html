@@ -28,6 +28,10 @@
       <h1 id="page-title">What link should we investigate?</h1>
       <p class="intro">Paste a link to compare what the scanner and visitor see.</p>
     </section>
+    <details id="scoreboard" class="disclosure">
+      <summary>Saved browser scoreboard</summary>
+      <p id="scoreboard-result" class="subtle" role="status"></p>
+    </details>
     <section class="conversation" aria-label="Investigation conversation">
       <section class="surface email-triage" id="email-triage" aria-labelledby="email-triage-heading" hidden>
         <div class="section-head"><h2 id="email-triage-heading">Email triage</h2></div>
@@ -199,6 +203,7 @@
         <button type="button" data-url="https://vexalo-docs.example/m/" aria-pressed="false">Mobile-only kit</button>
         <button type="button" data-url="https://vexalo-docs.example/bomb" aria-pressed="false">Resource bomb</button>
       </div>
+    <nav class="presets" id="recorded-runs" aria-label="Recorded runs" hidden><span>Recorded runs</span></nav>
     <details class="email-input">
       <summary>Or paste an email</summary>
       <form id="email-form">
