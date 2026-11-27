@@ -18,8 +18,8 @@ RUN npm i -g agent-browser@0.43.0 \
     && chrome="$(find /opt/agent-browser -type f -name chrome -perm -u+x | head -n 1)" \
     && test -n "$chrome" && ln -s "$chrome" /usr/local/bin/pd-chrome
 
-COPY recorder.mjs victim-start.sh ./
-RUN chmod 755 victim-start.sh && chmod 644 recorder.mjs \
+COPY bot.mjs recorder.mjs victim-start.sh ./
+RUN chmod 755 victim-start.sh && chmod 644 bot.mjs recorder.mjs \
     && useradd --uid 10001 --create-home --home-dir /home/pd pd
 
 USER 10001:10001
