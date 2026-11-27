@@ -1,13 +1,13 @@
 # Kickoff: Start Development
 
-## 1. Event Facts (fill in from the 09:00 answers)
+## 1. Event Facts
 
 | Item | Answer |
 |---|---|
-| Submission deadline | ___ (plan assumes 20:00) |
-| Judging criteria | ___ |
-| Pitch length and format | ___ |
-| Pre-written code allowed | ___ |
+| Submission deadline | 19:00 (event runs 09:00 to 21:00, hacking from 10:00) |
+| Judging criteria | Execution and innovation; containment first is required. Recommended: dashboard of the execution loop, retries and screenshot trail; approve-before-submit gate on irreversible browser actions (SPEC 6.6) |
+| Pitch length and format | Recorded demo video with one containment moment; how to submit: ask the organizers |
+| Pre-written code allowed | Yes |
 | Credits working | ___ |
 
 ## 2. Vultr Console Setup (Lane A, first 20 minutes)
@@ -54,7 +54,7 @@ Host names (replace `IP-DASHED`, for example `203-0-113-5`):
 ```bash
 curl -s https://api.vultrinference.com/v1/models -H "Authorization: Bearer $VULTR_INFERENCE_KEY" | python3 -m json.tool
 ```
-Pick the strongest text model. Send 10 test calls with the action schema (SPEC 6.3). Keep the model with 10 of 10 valid JSON. Put its ID in `PD_MODEL`, the second best in `PD_MODEL_FALLBACK`.
+Candidates: `glm-5.3`, `deepseek-v4.1-flash-1017` (text), `qwen3.8-flash-next` (vision); see SPEC 6.5. Send 10 test calls with the action schema (SPEC 6.3). Keep the model with 10 of 10 valid JSON. Put its ID in `PD_MODEL`, the second best in `PD_MODEL_FALLBACK`.
 
 ## 5. First Test: agent-browser Attach (Lane A, right after the image builds)
 
