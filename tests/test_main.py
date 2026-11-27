@@ -244,3 +244,38 @@ def test_no_browser_runs_in_the_app_process():
     import pathlib as pl
     source = (pl.Path(__file__).resolve().parent.parent / "app" / "main.py").read_text()
     assert "sync_playwright" not in source and "chromium" not in source.lower()
+
+
+def test_rate_limit_per_ip_behind_proxy(client, live, monkeypatch):
+    from app import main
+    monkeypatch.setattr(main, "_recent", {})
+    monkeypatch.setenv("PD_RATE_LIMIT_PER_IP", "2")
+    # the test client is not the proxy; stand in for Caddy's forwarded address (client_ip has its own test)
+    monkeypatch.setattr(main, "client_ip", lambda request: request.headers["x-forwarded-for"])
+    url = {"url": "http://vexalo-docs.203-0-113-5.nip.io/"}
+    a = {"X-Forwarded-For": "198.51.100.7"}
+    assert [client.post("/api/scans", json=url, headers=a).status_code for _ in range(3)] == [202, 202, 429]
+    # another visitor behind the same proxy is not affected
+    assert client.post("/api/scans", json=url, headers={"X-Forwarded-For": "198.51.100.8"}).status_code == 202
+
+
+def test_client_ip_ignores_forwarded_header_from_non_proxy():
+    from types import SimpleNamespace
+    from app import main
+    req = SimpleNamespace(client=SimpleNamespace(host="203.0.113.9"), headers={"x-forwarded-for": "1.2.3.4"})
+    assert main.client_ip(req) == "203.0.113.9"
+    req = SimpleNamespace(client=SimpleNamespace(host="127.0.0.1"), headers={"x-forwarded-for": "1.2.3.4, 198.51.100.7"})
+    assert main.client_ip(req) == "198.51.100.7"
+
+
+def test_analyst_can_override_a_real_scan(client, monkeypatch):
+    from app import db
+    events = []
+    store = {"real1": {"verdict": "Phishing", "decision": "block", "decided_by": "agent"}, "cap1": {"capture_only": True}}
+    monkeypatch.setattr(db, "get_scan", lambda sid: store.get(sid))
+    monkeypatch.setattr(db, "update_scan", lambda sid, **f: store[sid].update(f))
+    monkeypatch.setattr(db, "emit", lambda sid, t, p: events.append((t, p)))
+    r = client.post("/api/scans/real1/decision", json={"decision": "release"})
+    assert r.status_code == 200 and store["real1"]["decision"] == "release" and store["real1"]["decided_by"] == "analyst"
+    assert events == [("decision", {"decision": "release", "decided_by": "analyst"})]
+    assert client.post("/api/scans/cap1/decision", json={"decision": "block"}).status_code == 404
