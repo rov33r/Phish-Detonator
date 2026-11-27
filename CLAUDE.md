@@ -144,3 +144,4 @@ Trunk-based. `main` is the trunk and must always run, because the VM deploys fro
 | 11:30 | Agent finishes the Vexalo kit with a Vultr model, or switch to Skill Canary (SPEC 20) |
 | 15:00 | Public URL live; else stop features and fix deploy |
 | 17:00 | Feature freeze |
+| 19:00 | Submission deadline |

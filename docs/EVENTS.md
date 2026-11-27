@@ -13,7 +13,8 @@ Every SSE message is `{"id": <event id>, "ts": <ISO 8601>, "type": "<type>", "pa
 | `dispatch` | A | `{visit, profile, tool, reason, round, budget_left: {sandboxes, seconds}}` (`reason` from the investigator, first person) |
 | `sandbox_created` | A | `{visit, profile, container, runtime, limits: {memory, cpus, pids, seconds}}` |
 | `robot_done` | A | `{final_url, title, screenshot, has_password_field}` |
-| `agent_step` | B | `{step, action, ref, reason, url, title, is_login_page, brand_seen}` (`reason` is first person, max 20 words) |
+| `agent_step` | B | `{visit, step, action, ref, reason, url, title, is_login_page, brand_seen, model}` (`reason` is first person, max 20 words) |
+| `approval` | B | `{visit, step, action, ref, typed: ["{{DECOY_EMAIL}}", "{{DECOY_PASSWORD}}"], checks: [{name, ok}], decision: "auto_approved" or "denied", reason}` (SPEC 6.6; never the decoy value itself) |
 | `screenshot` | B | `{visit, step, path}` |
 | `request_seen` | A | `{visit, method, host, url}` |
 | `decoy_sent` | B | `{host, url, field: "email" or "password", encoding: "plain", "url" or "base64"}` |

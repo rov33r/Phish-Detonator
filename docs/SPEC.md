@@ -201,6 +201,7 @@ VERIFY rule order with `iptables -L INPUT -n --line-numbers` and `iptables -L DO
    - Observe: `snapshot -i` (truncate to 6,000 chars), current URL, title.
    - Decide: one LLM call, JSON action (6.3).
    - Validate: action in the allowed set; ref exists in the last snapshot; text fields only use placeholders.
+   - Approve: a submit action passes the approval gate first (6.6).
    - Act: `hover` then the action, with pacing (section 7); then `screenshot`.
    - Emit an SSE event per step.
 4. Stop on `done`, `give_up`, step limit, 120 s limit, or a navigation to a `download`.
@@ -231,13 +232,34 @@ Answer with one JSON object only, matching the schema.
   "is_login_page": true
 }
 ```
-Host replaces `{{DECOY_EMAIL}}` and `{{DECOY_PASSWORD}}` before the command runs. Invalid JSON: one repair retry with the parse error appended; then `give_up`.
+Host replaces `{{DECOY_EMAIL}}` and `{{DECOY_PASSWORD}}` before the command runs. Every LLM call asks for structured output (`response_format: {type: "json_schema", strict: true}`, supported by Vultr Serverless Inference), so invalid JSON is rare. Invalid JSON or a schema miss: one repair retry with the error appended; then `give_up`.
 
 ### 6.4 Decoy identity
 Per scan: email `<first>.<last>.<6 hex>@<random word>-mail.com` and password of 16 random characters (letters, digits, one symbol). Store both in the scan record. Values are unique per scan, so a string match in `network.jsonl` proves where they went. Also match URL-encoded and base64 forms.
 
-### 6.5 Model choice
-At 09:00, `GET https://api.vultrinference.com/v1/models` with the inference key. Pick the strongest text model that returns valid JSON for 10 of 10 test calls on the kit fixture. Keep a second model ID in `PD_MODEL_FALLBACK`. Vultr offers vision-capable models: pick one for `PD_VISION_MODEL` and use it for the brand check (8.3).
+### 6.5 Model choice and call settings
+At the start, `GET https://api.vultrinference.com/v1/models` with the inference key. Pick the strongest text model that returns valid JSON for 10 of 10 test calls on the kit fixture. Keep a second model ID in `PD_MODEL_FALLBACK`. Pick a vision model for `PD_VISION_MODEL` and use it for the brand check (8.3).
+
+Candidates from the Vultr model catalog (27 Nov 2026; confirm with the live list):
+| Use | First choice | Fallback | Notes |
+|---|---|---|---|
+| Agent and investigator (`PD_MODEL`) | `glm-5.3` | `deepseek-v4.1-flash-1017` | `glm-5.3` allows 30 requests/min and 8 at once; the fallback allows 120/min |
+| Vision brand check (`PD_VISION_MODEL`) | `qwen3.8-flash-next` | `glm-5.3-flash` | Image input as an `image_url` content part (PNG, max 20 MB) |
+
+Call settings (`app/llm.py`, the only module that talks to the model):
+- `response_format` `json_schema` with `strict: true`. If the model rejects a setting (HTTP 400), retry once with `json_object` and no reasoning setting.
+- `reasoning_effort: "low"` for agent steps (reasoning tokens count against the output limit and slow each step); `"medium"` for the investigator's plan and conclude.
+- `max_completion_tokens` 1,024 for agent steps, 2,048 for the investigator.
+- HTTP 429: wait `Retry-After` (capped at 10 s), retry. HTTP 502, 503, 504, timeout or connection error: retry after 1 s, 2 s, 4 s. After 3 attempts switch to `PD_MODEL_FALLBACK`, then fail.
+- The model ID used is written to every `agent_step` record, so a fallback is visible.
+
+### 6.6 Approval gate (approve before submit)
+The organizers recommend an approve-before-submit gate on irreversible browser actions. Submitting a form is the agent's one irreversible action, so it passes a gate first.
+- **When:** any `click` or `press` while a field on the page holds a placeholder value (the agent wrote `{{DECOY_EMAIL}}` or `{{DECOY_PASSWORD}}` in this visit and has not submitted since).
+- **Policy (code, not the model):** approve only if every value the agent typed in this visit is a decoy placeholder, the target host is not the app or a private address, and this is the first submit of the password. Anything else is denied, and the agent gets "denied by the approval gate" as feedback.
+- **Event:** `approval` with the action, the values typed (placeholders only, never the decoy itself), the policy checks and the decision (`auto_approved` or `denied`). The UI shows it as a gate card in the timeline before the password trail.
+- **Why automatic:** the agent only ever holds placeholders, and the host fills in a per-scan decoy, so no real credential can leave. The card says so.
+- Stretch: `PD_APPROVAL_MODE=manual` waits up to 30 s for an analyst click (`POST /api/scans/{id}/approve`), then denies.
 
 ## 6A. Investigator: Planning and Dispatch
 
@@ -486,6 +508,7 @@ The video containment moment: the kit page runs its bot check, tries to reach th
 | `VULTR_INFERENCE_KEY` | secret | Serverless Inference |
 | `PD_MODEL` / `PD_MODEL_FALLBACK` | from `/v1/models` | Agent model |
 | `PD_VISION_MODEL` | optional | Brand check |
+| `PD_APPROVAL_MODE` | `auto` (`manual` is a stretch) | Approval gate (6.6) |
 | `VULTR_API_KEY` | secret | High-risk mode |
 | `PD_S3_ENDPOINT`, `PD_S3_KEY`, `PD_S3_SECRET`, `PD_S3_BUCKET` | Vultr Object Storage | Evidence |
 | `PD_RUNTIME` | `runsc` (`runc` for local dev) | Sandbox runtime |
@@ -565,6 +588,7 @@ Acceptance tests (all must pass before feature freeze):
 | A17 | Signed report | `/api/verify` accepts the kit manifest; after changing one byte of one file it reports that file as changed |
 | A18 | Resource bomb | `/bomb` scan: `resource_limit_hit` emitted, verdict Suspicious with M5, `docker ps -a` clean, host load stays under 2 |
 | A19 | Stats | `sandbox_stats` events arrive once per second; `/api/stats` totals match `docker` history |
+| A20 | Approval gate | Kit run: an `approval` event with `auto_approved` comes before `decoy_sent`; unit test: a submit after typing a non-placeholder value is `denied` |
 
 ## 17. Demo Script
 
