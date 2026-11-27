@@ -1,6 +1,6 @@
 # Architecture
 
-Phish Detonator investigates a suspicious link the way a security analyst would, but inside disposable sandboxes. An investigator agent plans the case, sends a scanner-like robot and a person-like victim to the link in separate gVisor sandboxes, decides which follow-up visits to run, and concludes with claims that code checks against the evidence. On a scam, the agent blocks the link itself; an analyst can override.
+Phish Detonator investigates a suspicious link the way a security analyst would, but inside disposable sandboxes. An investigator agent plans the case, sends a scanner-like robot and a person-like victim to the link in separate gVisor sandboxes, decides which follow-up visits to run, and concludes with claims that code checks against the evidence. On phishing, the agent blocks the link itself; an analyst can override.
 
 ## System
 
@@ -77,11 +77,11 @@ sequenceDiagram
 | Victim visit | Picks every click and field from the page snapshot | Allows only refs from the latest snapshot and only decoy placeholders as text; the approval gate checks every submit |
 | Conclude | Writes claims with citations, proposes block or none | Rejects any claim whose citation does not show the claimed signal; the verdict comes from signals code computed |
 | Argue against itself | | Refutes or supports H4 "this is a legitimate login" by checking each credential destination: same site, brand-owned, known login provider |
-| Act | Blocks the link on a scam | Allows the block only when H4 is refuted |
+| Act | Blocks the link on phishing | Allows the block only when H4 is refuted |
 
 ## Verdict rules
 
-Scam needs a combination: the decoy password reached a third party (S1) and the page also lied, by showing a brand its host does not own (S4), showing scanners different content (S2), or handing the victim to the real brand after taking the password (M4). A password to a third party alone is Suspicious. Bot-detection probes (S3) are shown as context only, because legitimate bot protection reads the same properties. The output is never "safe": the weakest result is "No evidence found".
+Phishing needs a combination: the decoy password reached a third party (S1) and the page also lied, by showing a brand its host does not own (S4), showing scanners different content (S2), or handing the victim to the real brand after taking the password (M4). A password to a third party alone is Suspicious. Bot-detection probes (S3) are shown as context only, because legitimate bot protection reads the same properties. The output is never "safe": the weakest result is "No evidence found".
 
 ## Containment
 
@@ -108,8 +108,8 @@ Scam needs a combination: the decoy password reached a third party (S1) and the 
 
 | Case | Result |
 |---|---|
-| Phishing kit | 3 of 3 Scam, blocked by the agent |
-| Mobile-only kit | 3 of 3 Scam: the investigator read the phone-only notice and dispatched a phone visit on its own |
+| Phishing kit | 3 of 3 Phishing, blocked by the agent |
+| Mobile-only kit | 3 of 3 Phishing: the investigator read the phone-only notice and dispatched a phone visit on its own |
 | Legit Vexalo login (with bot protection) | No evidence found, H4 supported |
 
 ## Known limits
