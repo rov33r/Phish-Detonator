@@ -136,17 +136,34 @@ def test_demo_blocklist_rescan_and_email_tag(client):
     assert [(e["scan_id"], e["status"], e["decided_by"], e["verdict"]) for e in entries] == [
         (first, "blocked", "agent", "Phishing"),
     ]
+    preview = client.post("/api/email-preview", json={"email_text": f'<a href="{url}">Sign in</a>'}).json()
+    assert preview["links"][0]["blocklist"]["status"] == "blocked"
+    refused = client.post("/api/scans", json={"url": url})
+    assert refused.status_code == 409
+    assert refused.json()["detail"]["blocklist"]["scan_id"] == first
+    assert len(app.state.scans) == 1
+    client.post(f"/api/scans/{first}/decision", json={"decision": "release"})
+    entry = client.get("/api/blocklist").json()["entries"][0]
+    assert (entry["scan_id"], entry["status"], entry["decided_by"]) == (first, "released", "analyst")
     second = client.post("/api/scans", json={"url": url}).json()["scan_id"]
     events = read_events(client.get(f"/api/scans/{second}/events"))
     hit = events[0]
     assert hit["type"] == "blocklist_hit"
     assert {"url", "status", "scan_id", "verdict", "decided_by", "decided_at"} <= hit["payload"].keys()
-    assert hit["payload"]["scan_id"] == first
-    client.post(f"/api/scans/{second}/decision", json={"decision": "release"})
-    entry = client.get("/api/blocklist").json()["entries"][0]
-    assert (entry["scan_id"], entry["status"], entry["decided_by"]) == (second, "released", "analyst")
-    preview = client.post("/api/email-preview", json={"email_text": f'<a href="{url}">Sign in</a>'}).json()
-    assert preview["links"][0]["blocklist"]["status"] == "released"
+    assert (hit["payload"]["scan_id"], hit["payload"]["status"]) == (first, "released")
+
+
+def test_live_scan_of_a_blocked_link_is_refused(client, live, monkeypatch):
+    from app import blocklist, db
+
+    entry = {"url": "https://blocked.example/", "status": "blocked", "scan_id": "old", "verdict": "Phishing",
+             "decided_by": "agent", "decided_at": "2026-11-27T15:40:00+00:00"}
+    monkeypatch.setattr(blocklist, "lookup", lambda url, exclude=None: entry)
+    response = client.post("/api/scans", json={"url": "https://blocked.example/"})
+    assert response.status_code == 409
+    assert response.json()["detail"]["blocklist"] == entry
+    assert live == []
+    assert db.all_scans() == []
 
 
 def test_legitimate_submission_is_not_a_third_party_destination(client):
@@ -364,7 +381,7 @@ def test_approve_endpoint_reaches_the_waiting_agent(client, monkeypatch):
     assert result["d"] == "denied_by_analyst" and agent.pending("live1") == []
 
 
-def test_rescan_of_a_blocked_link_announces_it_and_still_runs(client, monkeypatch):
+def test_rescan_of_a_released_link_announces_it_and_still_runs(client, monkeypatch):
     from app import blocklist, db, main, orchestrator
     monkeypatch.setenv("PD_FEATURE_ORCHESTRATOR", "1")
     monkeypatch.setattr(main, "orchestrator_enabled", lambda url: True)
@@ -373,8 +390,8 @@ def test_rescan_of_a_blocked_link_announces_it_and_still_runs(client, monkeypatc
     events, runs = [], []
     monkeypatch.setattr(db, "emit", lambda sid, t, p: events.append((t, p)))
     monkeypatch.setattr(orchestrator, "run_scan", lambda *a: runs.append(a))
-    hit = {"url": "http://kit.test/", "status": "blocked", "scan_id": "old", "verdict": "Phishing",
-           "decided_by": "agent", "decided_at": "2026-11-27T15:40:00+00:00"}
+    hit = {"url": "http://kit.test/", "status": "released", "scan_id": "old", "verdict": "Phishing",
+           "decided_by": "analyst", "decided_at": "2026-11-27T15:40:00+00:00"}
     monkeypatch.setattr(blocklist, "lookup", lambda url, exclude=None: hit)
     r = client.post("/api/scans", json={"url": "http://kit.test/"})
     assert r.status_code == 202 and events == [("blocklist_hit", hit)]

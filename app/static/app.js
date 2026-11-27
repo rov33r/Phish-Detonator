@@ -247,6 +247,42 @@ function scanLink(id, text) {
   return link;
 }
 
+function unblockButton(entry) {
+  const button = element("button", "Unblock", "unblock");
+  button.type = "button";
+  button.addEventListener("click", async () => {
+    button.disabled = true;
+    try {
+      // Unblocking is the analyst's Release on the scan that made the decision.
+      const result = await post(`/api/scans/${encodeURIComponent(entry.scan_id)}/decision`, { decision: "release" });
+      if (entry.scan_id === scanId) recordDecision(result); else refreshBlocklist();
+      if (byId("blocklist-hit").dataset.scan === entry.scan_id) {
+        byId("blocklist-hit").replaceChildren("Unblocked. Start the scan again to investigate the link.");
+        byId("blocklist-hit").dataset.status = "released";
+      }
+    } catch (error) {
+      button.disabled = false;
+      button.textContent = "Retry unblock";
+      button.title = error.message;
+    }
+  });
+  return button;
+}
+
+function showBlocklistHit(p, refused) {
+  const banner = byId("blocklist-hit");
+  const who = p.decided_by === "agent" ? "the agent" : "the analyst";
+  const at = clock(p.decided_at);
+  const lead = p.status === "blocked" ? (refused ? "⛔ Blocked" : "⛔ Already blocked") : "Released earlier";
+  const head = [`${lead} by ${who}${at ? ` at ${at}` : ""}`, p.verdict].filter(Boolean).join(" · ");
+  banner.replaceChildren(`${head} · `, scanLink(p.scan_id, "view previous scan"));
+  if (refused) banner.append(" · not opened again ", unblockButton(p));
+  else banner.append(" · investigating again");
+  banner.dataset.status = p.status;
+  banner.dataset.scan = p.scan_id;
+  banner.hidden = false;
+}
+
 // Blocked links are rendered as text, never as links to the suspicious page.
 function refreshBlocklist() {
   fetch("/api/blocklist")
@@ -259,7 +295,7 @@ function refreshBlocklist() {
         const detail = [`Blocked by ${who}`, entry.verdict, clock(entry.decided_at)].filter(Boolean).join(" · ");
         const meta = element("p", `${detail} · `, "subtle");
         meta.append(scanLink(entry.scan_id, "view scan"));
-        appendRow("blocklist", element("code", entry.url), meta);
+        appendRow("blocklist", element("code", entry.url), meta, unblockButton(entry));
       }
       byId("blocklist-count").textContent = `(${blocked.length})`;
       byId("blocklist-empty").hidden = blocked.length > 0;
@@ -601,16 +637,7 @@ const render = {
     stop("Investigation complete", "complete");
   },
   decision(event, p) { recordDecision(p); },
-  blocklist_hit(event, p) {
-    const banner = byId("blocklist-hit");
-    const who = p.decided_by === "agent" ? "the agent" : "the analyst";
-    const at = clock(p.decided_at);
-    const lead = p.status === "blocked" ? "⛔ Already blocked" : "Released earlier";
-    const head = [`${lead} by ${who}${at ? ` at ${at}` : ""}`, p.verdict].filter(Boolean).join(" · ");
-    banner.replaceChildren(`${head} · `, scanLink(p.scan_id, "view previous scan"), " · investigating again");
-    banner.dataset.status = p.status;
-    banner.hidden = false;
-  },
+  blocklist_hit(event, p) { showBlocklistHit(p, false); },
   error(event, p) {
     if (captureOnly && p.where === "capture") {
       byId("verdict").textContent = "Screenshot unavailable";
@@ -782,7 +809,12 @@ async function post(path, payload) {
     body: JSON.stringify(payload),
   });
   const data = await response.json();
-  if (!response.ok) throw new Error(typeof data.detail === "string" ? data.detail : "Check the request and try again.");
+  if (!response.ok) {
+    const detail = data.detail;
+    const error = new Error(typeof detail === "string" ? detail : detail?.message ?? "Check the request and try again.");
+    error.blocklist = detail?.blocklist;
+    throw error;
+  }
   return data;
 }
 
@@ -861,6 +893,7 @@ form.addEventListener("submit", async (event) => {
     connectScan(result.scan_id);
   } catch (error) {
     stop(error.message, "error");
+    if (error.blocklist) showBlocklistHit(error.blocklist, true);
   }
 });
 

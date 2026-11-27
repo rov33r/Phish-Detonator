@@ -319,3 +319,5 @@ button[aria-pressed="true"] { color: var(--accent); border-color: var(--accent);
 [data-capture-only="true"] .disclosure,
 [data-capture-only="true"] .counts { display: none; }
 [data-capture-only="true"] .panes { grid-template-columns: minmax(0, 1fr); }
+.blocklist-hit .unblock, #blocklist .unblock { font: inherit; font-size: .8rem; font-weight: 600; padding: .2rem .6rem; border: 1px solid currentColor; border-radius: 4px; background: transparent; color: inherit; cursor: pointer; }
+#blocklist .unblock { color: var(--ink); justify-self: start; }

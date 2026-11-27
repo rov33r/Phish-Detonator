@@ -418,6 +418,11 @@ async def start_scan(body: ScanInput, request: Request):
     demo = url in PRESETS.values()
     if demo and not state.demo:
         raise HTTPException(503, "Simulated scans are disabled")
+    known = (state.demo_blocklist.get(blocklist.normalize(url)) if demo
+             else await asyncio.to_thread(blocklist.lookup, url))
+    if known and known["status"] == "blocked":  # a blocked link is not opened again until it is unblocked
+        raise HTTPException(409, {"message": "This link is on the blocklist. Unblock it to scan it again.",
+                                  "blocklist": known})
     scan_id = uuid4().hex
     if not demo:
         if os.getenv("PD_FEATURE_ORCHESTRATOR") != "1":
