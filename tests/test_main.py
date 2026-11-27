@@ -107,6 +107,48 @@ def test_email_preview_extracts_without_starting_a_scan(client):
     assert client.app.state.scans == {}
 
 
+def test_demo_waits_for_the_analyst_answer(client):
+    import time
+
+    app.state.delay = 0.001
+    scan_id = client.post("/api/scans", json={"url": PRESETS["kit"]}).json()["scan_id"]
+    path = f"/api/scans/{scan_id}"
+    scan = app.state.scans[scan_id]
+    deadline = time.monotonic() + 5
+    while scan.waiting is None and time.monotonic() < deadline:
+        time.sleep(0.01)
+    visit = scan.waiting
+    assert visit is not None
+    assert client.post(f"{path}/approve", json={"visit": "robot", "decision": "approve"}).status_code == 409
+    answer = client.post(f"{path}/approve", json={"visit": visit, "decision": "approve"})
+    assert answer.json() == {"visit": visit, "decision": "approve"}
+    assert client.post(f"{path}/approve", json={"visit": visit, "decision": "deny"}).status_code == 409
+    events = read_events(client.get(f"{path}/events"))
+    approval = next(event["payload"] for event in events if event["type"] == "approval")
+    assert approval["decision"] == "approved_by_analyst"
+
+
+def test_demo_blocklist_rescan_and_email_tag(client):
+    url = PRESETS["kit"]
+    first = client.post("/api/scans", json={"url": url}).json()["scan_id"]
+    read_events(client.get(f"/api/scans/{first}/events"))
+    entries = client.get("/api/blocklist").json()["entries"]
+    assert [(e["scan_id"], e["status"], e["decided_by"], e["verdict"]) for e in entries] == [
+        (first, "blocked", "agent", "Phishing"),
+    ]
+    second = client.post("/api/scans", json={"url": url}).json()["scan_id"]
+    events = read_events(client.get(f"/api/scans/{second}/events"))
+    hit = events[0]
+    assert hit["type"] == "blocklist_hit"
+    assert {"url", "status", "scan_id", "verdict", "decided_by", "decided_at"} <= hit["payload"].keys()
+    assert hit["payload"]["scan_id"] == first
+    client.post(f"/api/scans/{second}/decision", json={"decision": "release"})
+    entry = client.get("/api/blocklist").json()["entries"][0]
+    assert (entry["scan_id"], entry["status"], entry["decided_by"]) == (second, "released", "analyst")
+    preview = client.post("/api/email-preview", json={"email_text": f'<a href="{url}">Sign in</a>'}).json()
+    assert preview["links"][0]["blocklist"]["status"] == "released"
+
+
 def test_legitimate_submission_is_not_a_third_party_destination(client):
     scan = client.post("/api/scans", json={"url": PRESETS["legit"]}).json()
     events = read_events(client.get(f"/api/scans/{scan['scan_id']}/events"))

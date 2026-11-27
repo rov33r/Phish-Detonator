@@ -36,7 +36,8 @@ const sandboxRows = new Map();
 const stepReasons = new Map();
 const observedHosts = new Map();
 const thirdPartyHosts = new Set();
-const approvalCards = new Map();
+const latestShots = new Map();
+const autoAnswered = new Set();
 const approvalOutcomes = {
   auto_approved: "Auto-approved by the code policy",
   denied: "Denied by the code policy",
@@ -53,6 +54,8 @@ let playback = false;
 let captureOnly = false;
 let liveService = false;
 let limitHit = false;
+let approveRest = false;
+let pendingApproval;
 
 function status(text, state) {
   byId("status").textContent = text;
@@ -230,6 +233,40 @@ function recordDecision({ decision, decided_by }) {
   for (const button of byId("decisions").querySelectorAll("button")) {
     button.setAttribute("aria-pressed", String(button.dataset.decision === decision));
   }
+  refreshBlocklist();
+}
+
+function clock(iso) {
+  const date = new Date(iso);
+  return Number.isNaN(date.getTime()) ? "" : date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
+}
+
+function scanLink(id, text) {
+  const link = element("a", text);
+  link.href = `/replay/${encodeURIComponent(id)}`;
+  return link;
+}
+
+// Blocked links are rendered as text, never as links to the suspicious page.
+function refreshBlocklist() {
+  fetch("/api/blocklist")
+    .then((response) => response.ok ? response.json() : Promise.reject(new Error("unavailable")))
+    .then(({ entries }) => {
+      const blocked = (entries ?? []).filter((entry) => entry.status === "blocked");
+      byId("blocklist").replaceChildren();
+      for (const entry of blocked) {
+        const who = entry.decided_by === "agent" ? "agent" : "analyst";
+        const detail = [`Blocked by ${who}`, entry.verdict, clock(entry.decided_at)].filter(Boolean).join(" · ");
+        const meta = element("p", `${detail} · `, "subtle");
+        meta.append(scanLink(entry.scan_id, "view scan"));
+        appendRow("blocklist", element("code", entry.url), meta);
+      }
+      byId("blocklist-count").textContent = `(${blocked.length})`;
+      byId("blocklist-empty").hidden = blocked.length > 0;
+      byId("blocklist").hidden = blocked.length === 0;
+      byId("blocklist-panel").hidden = false;
+    })
+    .catch(() => { byId("blocklist-panel").hidden = true; });
 }
 
 function sandboxRow(visit) {
@@ -300,7 +337,9 @@ function renderEmailTriage({ links, flags }) {
     ? `${links.length} ${links.length === 1 ? "link" : "links"} found`
     : "No web links found.";
   for (const link of links) {
-    const row = appendRow("email-links", element("strong", link.url));
+    const title = element("strong", link.url);
+    if (link.blocklist?.status === "blocked") title.append(element("span", "Blocked", "blocked-tag"));
+    const row = appendRow("email-links", title);
     if (link.shown_text && link.shown_text !== link.url) row.append(element("p", link.shown_text, "subtle"));
     if (link.picked) row.append(element("p", link.reason || "Selected for investigation", "subtle"));
   }
@@ -412,70 +451,22 @@ const render = {
     activity(event, `${p.visit} · Step ${p.step} · ${p.action}`, `${p.reason} · ${p.model}`);
   },
   approval_requested(event, p) {
-    closeApproval(p.visit);
     byId("approval-stage").hidden = false;
     stageNote("approval", `Waiting · ${p.host}`);
     setPhase("approval");
-    const card = element("article", "", "approval-card");
-    const title = element("p", "", "approval-title");
-    title.append("The agent wants to submit the decoy login on ", element("strong", p.host || "this page"));
-    const note = element(
-      "p",
-      `${browserLabel(p.visit)} · Step ${p.step} · Only this scan's decoy ${(p.fields ?? []).join(" and ")} can be typed. Where the password really goes appears in the password trail.`,
-      "subtle",
-    );
-    const countdown = element("p", "", "approval-countdown");
-    const buttons = element("div", "", "decisions");
-    const approve = element("button", "Approve", "primary");
-    const deny = element("button", "Deny");
-    approve.type = deny.type = "button";
-    buttons.append(approve, deny);
-    const result = element("p", "", "subtle");
-    result.setAttribute("role", "status");
-    card.append(title, note, countdown, buttons, result);
-    byId("approvals").append(card);
-    const entry = { card, timer: undefined };
-    approvalCards.set(p.visit, entry);
-    const deadline = Date.now() + (Number(p.timeout_s) || 30) * 1000;
-    const tick = () => {
-      const left = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
-      countdown.textContent = left ? `${left} s to answer` : "No answer; the code policy decides";
-      if (!left) {
-        clearInterval(entry.timer);
-        approve.disabled = deny.disabled = true;
-      }
-    };
-    tick();
-    entry.timer = setInterval(tick, 250);
-    if (playback) {
-      approve.disabled = deny.disabled = true;
-      result.textContent = "Recorded run: the answer was given at the time.";
+    if (approveRest && !playback) {
+      autoAnswered.add(p.visit);
+      stageNote("approval", "Auto-approved by you");
+      answerApproval(p.visit, "approve");
+    } else {
+      openApprovalBanner(p);
     }
-    const answer = async (decision) => {
-      approve.disabled = deny.disabled = true;
-      result.textContent = "Sending…";
-      try {
-        const response = await fetch(`/api/scans/${scanId}/approve`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ visit: p.visit, decision }),
-        });
-        result.textContent = response.ok
-          ? `${decision === "approve" ? "Approval" : "Denial"} sent. Waiting for the agent.`
-          : "This visit is no longer waiting.";
-      } catch {
-        result.textContent = "Could not reach the server. The code policy decides on timeout.";
-      }
-    };
-    approve.addEventListener("click", () => answer("approve"));
-    deny.addEventListener("click", () => answer("deny"));
-    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    card.scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "center" });
     activity(event, `${p.visit} · Step ${p.step} · Approval requested`, `Submit on ${p.host || "this page"}`);
   },
   approval(event, p) {
     closeApproval(p.visit);
-    const outcome = approvalOutcomes[p.decision] ?? p.decision;
+    const outcome = autoAnswered.has(p.visit) && p.decision === "approved_by_analyst"
+      ? "Auto-approved by you" : approvalOutcomes[p.decision] ?? p.decision;
     byId("approval-stage").hidden = false;
     appendRow("approval-outcomes", element("strong", `${browserLabel(p.visit)} · ${outcome}`), element("span", p.reason ?? "", "subtle"));
     const denied = p.decision === "denied" || p.decision === "denied_by_analyst";
@@ -487,6 +478,8 @@ const render = {
     activity(event, `${p.visit} · Step ${p.step} · ${outcome}`, p.reason);
   },
   screenshot(event, p) {
+    latestShots.set(p.visit, p.path);
+    if (pendingApproval === p.visit) showApprovalShot(p.visit);
     const frames = byId("frames");
     const label = `${p.visit} · Step ${p.step}`;
     const caption = stepReasons.get(`${p.visit}:${p.step}`) ?? "Screenshot received.";
@@ -596,13 +589,28 @@ const render = {
       byId("untested").hidden = false;
       byId("untested").textContent = `Untested · ${p.untested.join(", ")}`;
     }
-    byId("decisions").hidden = playback;
-    if (p.action_taken === "blocked") recordDecision({ decision: "block", decided_by: p.decided_by });
-    else byId("decision").textContent = "No automatic action taken.";
+    const blocked = p.action_taken === "blocked";
+    byId("recommendation").hidden = false;
+    byId("recommendation").dataset.action = blocked ? "blocked" : "none";
+    byId("recommendation-action").textContent = blocked ? "Agent recommends: Block" : "Agent recommends: no block, review";
+    byId("recommendation-reason").textContent = p.reasons[0]?.text ?? "";
+    byId("decision-label").hidden = byId("decisions").hidden = playback;
+    byId("decision").textContent = "";
+    refreshBlocklist();
     activity(event, "Verdict reached", label);
     stop("Investigation complete", "complete");
   },
   decision(event, p) { recordDecision(p); },
+  blocklist_hit(event, p) {
+    const banner = byId("blocklist-hit");
+    const who = p.decided_by === "agent" ? "the agent" : "the analyst";
+    const at = clock(p.decided_at);
+    const lead = p.status === "blocked" ? "⛔ Already blocked" : "Released earlier";
+    const head = [`${lead} by ${who}${at ? ` at ${at}` : ""}`, p.verdict].filter(Boolean).join(" · ");
+    banner.replaceChildren(`${head} · `, scanLink(p.scan_id, "view previous scan"), " · investigating again");
+    banner.dataset.status = p.status;
+    banner.hidden = false;
+  },
   error(event, p) {
     if (captureOnly && p.where === "capture") {
       byId("verdict").textContent = "Screenshot unavailable";
@@ -659,16 +667,68 @@ function setRoundState(visit, text, state) {
   badge.dataset.state = state;
 }
 
+function approvalStage() {
+  return stages.find((stage) => stage.dataset.phase === "approval");
+}
+
+function showApprovalShot(visit) {
+  const image = byId("approval-shot");
+  const path = latestShots.get(visit);
+  image.hidden = !path;
+  if (path) {
+    image.src = evidenceUrl(path);
+    image.alt = `${browserLabel(visit)} with the filled sign-in form`;
+  }
+}
+
+function openApprovalBanner(p) {
+  pendingApproval = p.visit;
+  byId("approval-banner-title").replaceChildren(
+    "The agent wants to submit the decoy login on ", element("strong", p.host || "this page"));
+  showApprovalShot(p.visit);
+  const seconds = Number(p.timeout_s) || 60;
+  byId("approval-timer-label").textContent = `Policy approves automatically in ${seconds} s if you don't answer`;
+  byId("approval-banner").hidden = false;
+  const bar = byId("approval-bar");
+  bar.style.transition = "none";
+  bar.style.transform = "scaleX(1)";
+  bar.getBoundingClientRect();
+  bar.style.transition = `transform ${seconds}s linear`;
+  bar.style.transform = "scaleX(0)";
+  byId("approval-result").textContent = playback ? "Recorded run: the answer was given at the time." : "";
+  for (const button of byId("approval-banner").querySelectorAll("[data-approval]")) button.disabled = playback;
+  approvalStage().dataset.waiting = "true";
+}
+
+async function answerApproval(visit, decision) {
+  const id = scanId;
+  const result = byId("approval-result");
+  for (const button of byId("approval-banner").querySelectorAll("[data-approval]")) button.disabled = true;
+  result.textContent = "Sending…";
+  try {
+    const response = await fetch(`/api/scans/${id}/approve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ visit, decision }),
+    });
+    if (id !== scanId) return;
+    result.textContent = response.ok
+      ? `${decision === "approve" ? "Approval" : "Denial"} sent. Waiting for the agent.`
+      : "This visit is no longer waiting.";
+  } catch {
+    if (id === scanId) result.textContent = "Could not reach the server. The policy decides on timeout.";
+  }
+}
+
 function closeApproval(visit) {
-  const entry = approvalCards.get(visit);
-  if (!entry) return;
-  clearInterval(entry.timer);
-  entry.card.remove();
-  approvalCards.delete(visit);
+  if (visit !== undefined && visit !== pendingApproval) return;
+  pendingApproval = undefined;
+  byId("approval-banner").hidden = true;
+  delete approvalStage().dataset.waiting;
 }
 
 function clearApprovals() {
-  for (const visit of [...approvalCards.keys()]) closeApproval(visit);
+  closeApproval();
 }
 
 function stop(message, state) {
@@ -698,9 +758,11 @@ function reset() {
   }
   activeResult = undefined;
   clearApprovals();
+  approveRest = false;
+  byId("blocklist-hit").hidden = true;
   document.querySelector(".workspace").replaceWith(initialWorkspace.cloneNode(true));
   for (const id of counterIds) byId(id).textContent = "0";
-  for (const cache of [hypothesisRows, sandboxRows, stepReasons, observedHosts, thirdPartyHosts, blockedRows, roundCards, visitedStages]) cache.clear();
+  for (const cache of [hypothesisRows, sandboxRows, stepReasons, observedHosts, thirdPartyHosts, blockedRows, roundCards, visitedStages, latestShots, autoAnswered]) cache.clear();
   limitHit = false;
   for (const stage of stages) {
     stage.removeAttribute("aria-current");
@@ -816,6 +878,15 @@ if (replayRoute) {
     })
     .catch(() => {});
 }
+
+byId("approval-banner").addEventListener("click", (event) => {
+  const button = event.target.closest("[data-approval]");
+  if (!button || !pendingApproval || playback) return;
+  if (button.dataset.approval === "approve-rest") approveRest = true;
+  answerApproval(pendingApproval, button.dataset.approval === "deny" ? "deny" : "approve");
+});
+
+refreshBlocklist();
 
 document.addEventListener("click", async (event) => {
   const button = event.target.closest("[data-decision]");

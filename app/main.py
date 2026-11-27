@@ -6,7 +6,7 @@ import os
 import re
 import threading
 import time
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
@@ -59,6 +59,10 @@ class Scan:
     verdict: dict | None = None
     decision: str | None = None
     decided_by: str | None = None
+    id: str = ""
+    answer: str | None = None
+    waiting: str | None = None
+    answered: asyncio.Event = field(default_factory=asyncio.Event)
     events: list[dict] = field(default_factory=list)
     changed: asyncio.Condition = field(default_factory=asyncio.Condition)
 
@@ -217,8 +221,20 @@ def demo_events(url, mode):
     }
 
 
-async def play_demo(scan, delay):
+def remember_decision(known, scan):
+    """Demo blocklist: in memory only, keyed like the real one (app/blocklist.py)."""
+    known[blocklist.normalize(scan.url)] = {
+        "url": scan.url, "status": "blocked" if scan.decision == "block" else "released", "scan_id": scan.id,
+        "verdict": (scan.verdict or {}).get("verdict"), "decided_by": scan.decided_by, "decided_at": timestamp(),
+    }
+
+
+async def play_demo(scan, delay, known=None):
+    known = {} if known is None else known
     try:
+        hit = known.get(blocklist.normalize(scan.url))
+        if hit:
+            await scan.emit("blocklist_hit", hit)
         for event_type, payload in demo_events(scan.url, scan.mode):
             await asyncio.sleep(delay)
             if event_type == "verdict":
@@ -226,10 +242,20 @@ async def play_demo(scan, delay):
                 if payload["action_taken"] == "blocked":
                     scan.decision = "block"
                     scan.decided_by = "agent"
+                    remember_decision(known, scan)
+            if event_type == "approval" and scan.answer:
+                decision = "approved_by_analyst" if scan.answer == "approve" else "denied_by_analyst"
+                payload = {**payload, "decision": decision, "reason": "The analyst answered in the simulation."}
+            if event_type == "approval_requested":
+                scan.answer = None
+                scan.answered.clear()
+                scan.waiting = payload["visit"] if delay else None
             await scan.emit(event_type, payload)
-            if event_type == "approval_requested" and delay:
-                # Hold so the approval card stays on screen for its countdown.
-                await asyncio.sleep(payload["timeout_s"])
+            if scan.waiting:
+                # Hold until the analyst answers or the countdown runs out.
+                with suppress(TimeoutError):
+                    await asyncio.wait_for(scan.answered.wait(), payload["timeout_s"])
+                scan.waiting = None
     finally:
         async with scan.changed:
             scan.status = "finished" if scan.verdict else "failed"
@@ -240,6 +266,7 @@ async def play_demo(scan, delay):
 async def lifespan(application):
     application.state.scans = {}
     application.state.tasks = set()
+    application.state.demo_blocklist = {}
     application.state.demo = os.getenv("PD_FEATURE_FAKE_SCAN") == "1"
     application.state.delay = 0.38
     yield
@@ -263,11 +290,13 @@ class EmailPreviewInput(BaseModel):
 
 
 @app.post("/api/email-preview")
-async def email_preview(body: EmailPreviewInput):
+async def email_preview(body: EmailPreviewInput, request: Request):
     try:
         links = extract_links(body.email_text)
+        known = getattr(request.app.state, "demo_blocklist", {})
         for link in links:
-            link["blocklist"] = await asyncio.to_thread(blocklist.lookup, link["url"])
+            link["blocklist"] = (known.get(blocklist.normalize(link["url"]))
+                                 or await asyncio.to_thread(blocklist.lookup, link["url"]))
         return {"links": links, "flags": flags(body.email_text, links)}
     except ValueError as error:
         raise HTTPException(422, "The email could not be parsed") from error
@@ -408,9 +437,9 @@ async def start_scan(body: ScanInput, request: Request):
         target, args = (orchestrator.run_scan, (scan_id, url, body.mode)) if active else (orchestrator.run_capture, (scan_id, url))
         threading.Thread(target=target, args=args, daemon=True).start()
         return {"scan_id": scan_id, "queued_position": None, "capture_only": not active}
-    scan = Scan(url, body.mode)
+    scan = Scan(url, body.mode, id=scan_id)
     state.scans[scan_id] = scan
-    task = asyncio.create_task(play_demo(scan, state.delay))
+    task = asyncio.create_task(play_demo(scan, state.delay, state.demo_blocklist))
     state.tasks.add(task)
     task.add_done_callback(state.tasks.discard)
     return {"scan_id": scan_id, "queued_position": None, "capture_only": False}
@@ -539,14 +568,24 @@ async def scan_events(scan_id: str, request: Request, after: int = 0):
 
 
 @app.get("/api/blocklist")
-async def get_blocklist():
+async def get_blocklist(request: Request):
     """Links the agent or an analyst decided, latest decision per link, newest first."""
-    return {"entries": await asyncio.to_thread(blocklist.entries)}
+    rows = await asyncio.to_thread(blocklist.entries)
+    demo = list(getattr(request.app.state, "demo_blocklist", {}).values())
+    return {"entries": sorted(demo + rows, key=lambda e: e.get("decided_at") or "", reverse=True)}
 
 
 @app.post("/api/scans/{scan_id}/approve")
-async def approve(scan_id: str, body: ApprovalInput):
+async def approve(scan_id: str, body: ApprovalInput, request: Request):
     """The analyst answers an approval_requested before the agent's submit (SPEC 6.6 manual mode)."""
+    scan = demo_scan(request, scan_id)
+    if scan is not None:
+        if scan.waiting != body.visit:
+            raise HTTPException(409, "Nothing is waiting for approval in this visit")
+        scan.answer = body.decision
+        scan.waiting = None
+        scan.answered.set()
+        return {"visit": body.visit, "decision": body.decision}
     record = await asyncio.to_thread(db.get_scan, scan_id)
     if record is None or record.get("capture_only"):
         raise HTTPException(404, "Scan not found")
@@ -574,6 +613,7 @@ async def decide(scan_id: str, body: DecisionInput, request: Request):
         raise HTTPException(409, "Wait for the verdict before making a decision")
     scan.decision = body.decision
     scan.decided_by = "analyst"
+    remember_decision(request.app.state.demo_blocklist, scan)
     payload = {"decision": scan.decision, "decided_by": scan.decided_by}
     await scan.emit("decision", payload)
     return payload

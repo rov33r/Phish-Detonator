@@ -36,6 +36,13 @@
       <p id="scoreboard-result" class="subtle" role="status"></p>
       </div>
     </details>
+    <details id="blocklist-panel" class="disclosure" hidden>
+      <summary>Blocklist <span id="blocklist-count"></span></summary>
+      <div class="section-body">
+        <p class="subtle" id="blocklist-empty">No blocked links yet.</p>
+        <ul class="clean rows" id="blocklist" aria-label="Blocked links"></ul>
+      </div>
+    </details>
     <section class="conversation" aria-label="Investigation conversation">
       <section class="surface email-triage" id="email-triage" aria-labelledby="email-triage-heading" hidden>
         <div class="section-head"><h2 id="email-triage-heading">Email triage</h2></div>
@@ -54,6 +61,8 @@
             <span class="status" id="status" role="status">Ready to scan</span>
             <code id="case-id"></code>
           </div>
+          <p class="blocklist-hit" id="blocklist-hit" role="status" hidden></p>
+          <div class="scan-dock">
           <ol class="scan-stages" aria-label="Scan progress">
             <li data-phase="plan" data-target="investigation"><strong>Plan</strong><span class="stage-note"></span></li>
             <li data-phase="captures" data-target="comparison"><strong>Two browsers</strong><span class="stage-note"></span></li>
@@ -61,6 +70,22 @@
             <li data-phase="approval" data-target="approval-stage"><strong>Your approval</strong><span class="stage-note"></span></li>
             <li data-phase="verdict" data-target="verdict-panel"><strong>Verdict</strong><span class="stage-note"></span></li>
           </ol>
+          <section class="approval-banner" id="approval-banner" aria-labelledby="approval-banner-title" hidden>
+            <img id="approval-shot" alt="" hidden>
+            <div class="approval-body">
+              <p class="approval-title" id="approval-banner-title"></p>
+              <p class="subtle">Placeholders only, a throwaway identity</p>
+              <div class="approval-timer" aria-hidden="true"><span id="approval-bar"></span></div>
+              <p class="subtle" id="approval-timer-label"></p>
+              <div class="decisions">
+                <button type="button" class="primary" data-approval="approve">Approve</button>
+                <button type="button" data-approval="deny">Deny</button>
+                <button type="button" data-approval="approve-rest">Approve the rest of this scan</button>
+              </div>
+              <p class="subtle" id="approval-result" role="status"></p>
+            </div>
+          </section>
+          </div>
           <div class="workspace">
             <details class="surface investigation disclosure stage-section" id="investigation" open>
               <summary>Investigation details</summary>
@@ -150,7 +175,6 @@
             <section class="surface approval-stage stage-section" id="approval-stage" aria-labelledby="approval-heading" hidden>
               <h2 id="approval-heading">Your approval</h2>
               <div class="section-body">
-                <div id="approvals" aria-live="polite"></div>
                 <ul class="clean rows" id="approval-outcomes" aria-label="Approval outcomes" hidden></ul>
               </div>
             </section>
@@ -164,14 +188,19 @@
                   <p class="stamp" id="verdict">Awaiting evidence</p>
                   <p id="credential-finding" class="subtle" hidden></p>
                   <p id="legitimate-check" class="subtle" hidden>Legitimate login ruled out</p>
-                  <p id="decision" class="subtle" role="status">The verdict appears after the scan.</p>
-                  <ul class="clean rows" id="reasons" hidden></ul>
-                  <ul class="clean rows" id="rejected" hidden aria-label="Rejected claims"></ul>
-                  <p id="untested" class="subtle" hidden></p>
+                  <div class="recommendation" id="recommendation" hidden>
+                    <p><strong id="recommendation-action"></strong></p>
+                    <p class="subtle" id="recommendation-reason"></p>
+                  </div>
+                  <p class="decision-label" id="decision-label" hidden>Your decision</p>
                   <div id="decisions" class="decisions" hidden>
                     <button type="button" data-decision="block">Block</button>
                     <button type="button" data-decision="release">Release</button>
                   </div>
+                  <p id="decision" class="subtle" role="status">The verdict appears after the scan.</p>
+                  <ul class="clean rows" id="reasons" hidden></ul>
+                  <ul class="clean rows" id="rejected" hidden aria-label="Rejected claims"></ul>
+                  <p id="untested" class="subtle" hidden></p>
                 </div>
               </aside>
               <details class="surface disclosure">
@@ -211,6 +240,7 @@
           <input inputmode="url" autocapitalize="off" spellcheck="false" type="url" name="url" id="url" placeholder="https://example.com/link" required autocomplete="off">
         </label>
         <button class="primary" id="scan-button">Start scan</button>
+        <p class="subtle scan-note">The agent will ask before it submits anything.</p>
       </form>
       <div class="presets" id="simulated-presets" aria-label="Simulation presets">
         <span>Try a preset</span>
