@@ -1,46 +1,50 @@
 :root {
   color-scheme: light;
-  --page: #f8f9f6;
-  --surface: #fff;
-  --ink: #202b27;
-  --muted: #556660;
-  --rule: #d8e1da;
-  --control: #788980;
-  --accent: #155f50;
-  --accent-hover: #0d493c;
-  --wash: #e6f0ea;
-  --risk: #9a3026;
-  --risk-bg: #fae8e3;
-  --warn: #74481a;
-  --warn-bg: #f7ecd6;
+  --page: #fff;
+  --surface: #f5f6fb;
+  --ink: #0b1020;
+  --muted: #4a5168;
+  --rule: #e1e5f2;
+  --control: #8a90a6;
+  --accent: #3b5bfc;
+  --accent-hover: #2a46e0;
+  --wash: #e6ebfd;
+  --lime: #c8f83a;
+  --on-lime: #0b1020;
+  --risk: #c2261b;
+  --risk-bg: #fde8e6;
+  --warn: #8a5a00;
+  --warn-bg: #fff1d1;
   --on-accent: #fff;
-  --prompt-border: #cadecf;
-  --skeleton: #dce5df;
-  --shimmer: #f7fbf8;
-  --composer-shadow: #24382c0f;
+  --prompt-border: #cfd7f8;
+  --skeleton: #e6e9f3;
+  --shimmer: #f7f8fc;
+  --composer-shadow: #0b10201a;
   --mono: ui-monospace, "SFMono-Regular", Consolas, monospace;
   font-family: system-ui, sans-serif;
 }
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --page: #151917;
-  --surface: #1d2420;
-  --ink: #e9f0ec;
-  --muted: #adbeb4;
-  --rule: #39463e;
-  --control: #758b7e;
-  --accent: #9fe2c9;
-  --accent-hover: #b9f0dd;
-  --wash: #243b33;
-  --risk: #ffb9ad;
-  --risk-bg: #482b28;
-  --warn: #f3d1a4;
-  --warn-bg: #483728;
-  --on-accent: #142c23;
-  --prompt-border: #456457;
-  --skeleton: #37473f;
-  --shimmer: #52665a;
-  --composer-shadow: #0005;
+  --page: #0b1020;
+  --surface: #161c30;
+  --ink: #f4f5fa;
+  --muted: #a7aec6;
+  --rule: #2a3150;
+  --control: #6f7898;
+  --accent: #8ea2ff;
+  --accent-hover: #b0bfff;
+  --wash: #1e2744;
+  --lime: #c8f83a;
+  --on-lime: #0b1020;
+  --risk: #ffb3ab;
+  --risk-bg: #4a1f24;
+  --warn: #ffd88a;
+  --warn-bg: #45361a;
+  --on-accent: #0b1020;
+  --prompt-border: #34407a;
+  --skeleton: #252d48;
+  --shimmer: #36406a;
+  --composer-shadow: #0006;
 }
 *, *::before, *::after { box-sizing: border-box; }
 [hidden] { display: none !important; }
@@ -61,9 +65,9 @@ button.theme-toggle:hover { background: var(--wash); }
 .tag { font-size: .8rem; color: var(--muted); text-align: end; }
 main.wrap { flex: 1; display: flex; flex-direction: column; }
 .welcome { margin: auto 0; text-align: center; padding: clamp(3.5rem, 16vh, 10rem) 0; }
-.welcome-mark { display: inline-grid; place-items: center; width: 3.7rem; height: 3.7rem; border-radius: 1.15rem; background: var(--wash); margin-bottom: 1.15rem; }
-.welcome-mark span { grid-area: 1 / 1; width: 1.35rem; height: 1.35rem; border: 2px solid var(--accent); border-radius: .35rem; translate: -.25rem -.25rem; }
-.welcome-mark span + span { translate: .25rem .25rem; background: var(--wash); }
+.welcome-mark { display: inline-grid; place-items: center; width: 3.7rem; height: 3.7rem; border-radius: 1.15rem; background: var(--ink); margin-bottom: 1.15rem; }
+.welcome-mark span { grid-area: 1 / 1; width: 1.35rem; height: 1.35rem; border: 2px solid var(--lime); border-radius: .35rem; translate: -.25rem -.25rem; }
+.welcome-mark span + span { translate: .25rem .25rem; background: var(--ink); }
 h1 { font-size: clamp(1.85rem, 4.5vw, 2.85rem); font-weight: 750; letter-spacing: -.04em; line-height: 1.12; text-wrap: balance; }
 .intro { color: var(--muted); margin-top: .55rem; }
 .conversation { min-width: 0; }
@@ -94,7 +98,7 @@ code, .mono, .counts b { font-family: var(--mono); font-variant-numeric: tabular
 .stamp[data-tone] { border-radius: .35rem; padding: .18rem .45rem; }
 .stamp[data-tone="risk"] { color: var(--risk); background: var(--risk-bg); }
 .stamp[data-tone="warn"] { color: var(--warn); background: var(--warn-bg); }
-.stamp[data-tone="good"] { color: var(--accent); background: var(--wash); }
+.stamp[data-tone="good"] { color: var(--on-lime); background: var(--lime); }
 [data-tone="risk"] { color: var(--risk); }
 .subtle, .caption { color: var(--muted); font-size: .85rem; overflow-wrap: anywhere; }
 .disclosure { border-top: 1px solid var(--rule); }
