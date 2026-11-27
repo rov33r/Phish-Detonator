@@ -291,6 +291,7 @@ border:1px solid #c9d1de;border-radius:8px;font-size:16px}
 .pdf{background:#d93a3a;color:#fff;font-weight:700;font-size:12px;padding:8px 6px;border-radius:4px}
 .error{color:#b42318;background:#fef3f2;padding:8px 12px;border-radius:8px}
 pre{white-space:pre-wrap;word-break:break-all}
+@media (min-width:900px){body>*{zoom:1.5}}@media (min-width:900px) and (min-height:900px){body>*{zoom:1.8}}
 """
 
 
