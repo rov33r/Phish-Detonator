@@ -67,7 +67,7 @@ def demo_events(url, mode):
     legit = preset == "legit"
     bomb = preset == "bomb"
     mobile = preset == "mobile"
-    scam = not (legit or bomb)
+    phishing = not (legit or bomb)
     yield "scan_started", {"url": url, "mode": mode, "decoy_email": DECOY}
     hypotheses = [
         {"id": "H1", "text": "The scanner and victim see different pages.", "status": "open"},
@@ -143,19 +143,19 @@ def demo_events(url, mode):
         }
         login = f"{victim}/login.png"
         yield "screenshot", {"visit": victim, "step": 2, "path": login}
-        host = "cdn-metrics.example" if scam else "vexalo.example"
+        host = "cdn-metrics.example" if phishing else "vexalo.example"
         yield "approval", {
             "visit": victim, "step": 2, "action": "submit", "ref": None,
             "typed": ["{{DECOY_EMAIL}}", "{{DECOY_PASSWORD}}"],
             "checks": [{"name": "Synthetic values only", "ok": True}],
             "decision": "auto_approved", "reason": "The simulated submission uses only decoy placeholders.",
         }
-        if scam:
+        if phishing:
             trail.append(host)
         receipt = f"{victim}/network.txt"
         yield "request_seen", {"visit": victim, "method": "POST", "host": host, "url": f"https://{host}/submit"}
         yield "decoy_sent", {"host": host, "url": f"https://{host}/submit", "field": "password", "encoding": "plain"}
-        if scam:
+        if phishing:
             yield "probe_seen", {"visit": victim, "name": "webdriver"}
             for blocked in ("Cloud metadata", "Host gateway", "Application"):
                 yield "request_blocked", {
@@ -171,16 +171,16 @@ def demo_events(url, mode):
                 {"signal": "S2", "text": "The scanner saw news while the victim saw a sign-in form.",
                  "evidence": ["robot/final.png", login]},
             ])
-        for key, evidence in (("H1", [login]), ("H2", [f"{receipt}:1"] if scam else [])):
+        for key, evidence in (("H1", [login]), ("H2", [f"{receipt}:1"] if phishing else [])):
             yield "hypothesis_update", {
-                "id": key, "status": "supported" if scam else "refuted",
+                "id": key, "status": "supported" if phishing else "refuted",
                 "reason": "Comparison complete.", "evidence": evidence,
             }
         yield "hypothesis_update", {
-            "id": "H4", "status": "refuted" if scam else "supported",
+            "id": "H4", "status": "refuted" if phishing else "supported",
             "reason": (
                 "The destination is unrelated to Vexalo and is not a known login provider."
-                if scam else "Vexalo received the decoy on its own domain."
+                if phishing else "Vexalo received the decoy on its own domain."
             ),
             "evidence": ["checks/destinations.jsonl:1"],
         }
@@ -193,9 +193,9 @@ def demo_events(url, mode):
         "visit": victim, "container": f"demo-{victim}", "lifetime_s": 12, "peak_mem_mb": peak,
     }
     yield "verdict", {
-        "verdict": "Scam" if scam else "Suspicious" if bomb else "No evidence found",
+        "verdict": "Phishing" if phishing else "Suspicious" if bomb else "No evidence found",
         "reasons": reasons, "password_sent_to": trail,
-        "action_taken": "blocked" if scam else "none", "decided_by": "agent",
+        "action_taken": "blocked" if phishing else "none", "decided_by": "agent",
         "untested": ["Password destination"] if bomb else [],
     }
 

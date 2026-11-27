@@ -33,7 +33,7 @@ def test_dashboard_and_disabled_scan(monkeypatch):
 
 
 @pytest.mark.parametrize(("preset", "expected"), [
-    ("legit", "No evidence found"), ("kit", "Scam"), ("mobile", "Scam"), ("bomb", "Suspicious"),
+    ("legit", "No evidence found"), ("kit", "Phishing"), ("mobile", "Phishing"), ("bomb", "Suspicious"),
 ])
 def test_simulation_outcomes(client, preset, expected):
     response = client.post("/api/scans", json={"url": PRESETS[preset]})
@@ -49,6 +49,9 @@ def test_simulation_outcomes(client, preset, expected):
     if preset == "bomb":
         assert any(event["type"] == "resource_limit_hit" for event in events)
     if preset == "kit":
+        verdict = events[-1]["payload"]
+        assert "S1" in {reason["signal"] for reason in verdict["reasons"]}
+        assert verdict["password_sent_to"] == ["cdn-metrics.example"]
         approval = next(event["payload"] for event in events if event["type"] == "approval")
         assert approval["decision"] == "auto_approved"
         assert approval["typed"] == ["{{DECOY_EMAIL}}", "{{DECOY_PASSWORD}}"]

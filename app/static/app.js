@@ -419,8 +419,13 @@ const render = {
     thirdPartyHosts.clear();
     for (const host of p.password_sent_to) thirdPartyHosts.add(host);
     renderTrail();
+    if (thirdPartyHosts.size && p.reasons.some((reason) => reason.signal === "S1")) {
+      const finding = byId("credential-finding");
+      finding.hidden = false;
+      finding.textContent = `Credential theft confirmed · Decoy password sent to ${[...thirdPartyHosts].join(", ")}.`;
+    }
     const stamp = byId("verdict");
-    const label = p.verdict === "Scam" ? "Phishing" : p.verdict;
+    const label = p.verdict;
     stamp.textContent = label;
     activeResult = label;
     stamp.dataset.tone = { Phishing: "risk", Suspicious: "warn", "No evidence found": "good" }[label];
@@ -579,6 +584,7 @@ byId("email-form").addEventListener("submit", async (event) => {
   try {
     const result = await post("/api/email-preview", { email_text: byId("email-text").value });
     renderEmailTriage(result);
+    byId("email-form").closest("details").open = false;
     byId("email-triage").scrollIntoView({ block: "nearest" });
     message.textContent = "Email preview ready. No links were opened.";
   } catch (error) {
