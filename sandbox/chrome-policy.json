@@ -1,0 +1,5 @@
+{
+  "HttpsUpgradesEnabled": false,
+  "HttpsOnlyMode": "disallowed",
+  "DnsOverHttpsMode": "off"
+}
