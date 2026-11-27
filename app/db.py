@@ -80,6 +80,13 @@ def get_scan(scan_id: str) -> dict | None:
     return json.loads(row[0]) if row else None
 
 
+def all_scans() -> list[dict]:
+    """Every scan record with its id (the blocklist reads decisions from here)."""
+    with closing(_connect()) as con:
+        rows = con.execute("SELECT id, fields FROM scans").fetchall()
+    return [{"id": i, **json.loads(f)} for i, f in rows]
+
+
 def events(scan_id: str, after: int = 0) -> list[dict]:
     with closing(_connect()) as con:
         rows = con.execute("SELECT id, ts, type, payload FROM events WHERE scan_id = ? AND id > ? ORDER BY id",

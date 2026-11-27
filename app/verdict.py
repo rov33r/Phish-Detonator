@@ -8,6 +8,7 @@ from __future__ import annotations
 import base64
 import ipaddress
 import json
+from datetime import UTC, datetime
 import math
 import os
 import pathlib
@@ -501,5 +502,6 @@ def decide(scan_id: str, claims: list[dict] | None = None, *, action: str = "blo
     (scan_dir / "verdict.json").write_text(json.dumps(result, indent=2))
     _emit(scan_id, "verdict", {k: result[k] for k in ("verdict", "reasons", "password_sent_to",
                                                       "action_taken", "untested")} | {"decided_by": "agent"})
-    _update(scan_id, verdict=verdict, **({"decision": "block", "decided_by": "agent"} if blocked else {}))
+    _update(scan_id, verdict=verdict, **({"decision": "block", "decided_by": "agent",
+                                          "decided_at": datetime.now(UTC).isoformat()} if blocked else {}))
     return result

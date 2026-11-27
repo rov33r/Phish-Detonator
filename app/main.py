@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse, PlainTextResponse, Response, Streami
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, HttpUrl
 
-from app import agent, db, orchestrator, scoreboard
+from app import agent, blocklist, db, orchestrator, scoreboard
 from app.email_intake import extract_links, flags
 
 ROOT = Path(__file__).resolve().parent
@@ -266,6 +266,8 @@ class EmailPreviewInput(BaseModel):
 async def email_preview(body: EmailPreviewInput):
     try:
         links = extract_links(body.email_text)
+        for link in links:
+            link["blocklist"] = await asyncio.to_thread(blocklist.lookup, link["url"])
         return {"links": links, "flags": flags(body.email_text, links)}
     except ValueError as error:
         raise HTTPException(422, "The email could not be parsed") from error
@@ -399,6 +401,9 @@ async def start_scan(body: ScanInput, request: Request):
             raise HTTPException(429, "Too many scans from this address. Try again in a few minutes.")
         await asyncio.to_thread(db.update_scan, scan_id, url=url, mode=body.mode, status="queued",
                                 client_ip=ip, capture_only=not active)
+        known = await asyncio.to_thread(blocklist.lookup, url, exclude=scan_id)
+        if known:  # the link was decided before: say so first, then investigate it fresh
+            await asyncio.to_thread(db.emit, scan_id, "blocklist_hit", known)
         # Both paths run in sandboxes: a full investigation, or a robot-only capture without a decoy.
         target, args = (orchestrator.run_scan, (scan_id, url, body.mode)) if active else (orchestrator.run_capture, (scan_id, url))
         threading.Thread(target=target, args=args, daemon=True).start()
@@ -533,6 +538,12 @@ async def scan_events(scan_id: str, request: Request, after: int = 0):
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
+@app.get("/api/blocklist")
+async def get_blocklist():
+    """Links the agent or an analyst decided, latest decision per link, newest first."""
+    return {"entries": await asyncio.to_thread(blocklist.entries)}
+
+
 @app.post("/api/scans/{scan_id}/approve")
 async def approve(scan_id: str, body: ApprovalInput):
     """The analyst answers an approval_requested before the agent's submit (SPEC 6.6 manual mode)."""
@@ -554,7 +565,7 @@ async def decide(scan_id: str, body: DecisionInput, request: Request):
         if not record.get("verdict"):
             raise HTTPException(409, "Wait for the verdict before making a decision")
         payload = {"decision": body.decision, "decided_by": "analyst"}
-        await asyncio.to_thread(db.update_scan, scan_id, **payload)
+        await asyncio.to_thread(db.update_scan, scan_id, **payload, decided_at=datetime.now(UTC).isoformat())
         await asyncio.to_thread(db.emit, scan_id, "decision", payload)
         return payload
     if scan.capture_only:

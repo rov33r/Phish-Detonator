@@ -14,7 +14,7 @@ Deadline 19:00. Architecture: `docs/ARCHITECTURE.md`. This sheet replaces the SP
 
 ## Video script (about 3 minutes)
 
-Record from the public URL with `PD_APPROVAL_MODE=manual`. The approval card waits 30 s: click it promptly. Cut the waiting between rounds; a kit scan takes about 90 s.
+Record from the public URL with `PD_APPROVAL_MODE=manual`. The approval banner waits 60 s. Cut the waiting between rounds; a kit scan takes about 90 s.
 
 | Time | Screen | Voice-over |
 |---|---|---|
@@ -71,7 +71,7 @@ The H4 line is written by code, not the model: say so. "The agent proposes, code
 
 - Before the verdict, point at the real-login question: "Before blocking, the agent tries to prove the page is a legitimate login. It checks where the password went: not the brand's site, not a login provider. Refuted." This answers false positives before anyone asks.
 - Point at a rejected claim if one appears: "The agent made a claim the evidence did not support, and code threw it out."
-- On the approval card: "The agent's one irreversible action, submitting a form, waits for a person. Deny, and the visit stops. No answer in 30 s, and the code policy decides, so an unattended scan still finishes."
+- On the approval card: "The agent's one irreversible action, submitting a form, waits for a person. Deny, and the visit stops. No answer in 60 s, and the code policy decides, so an unattended scan still finishes."
 
 ## Recording plan
 

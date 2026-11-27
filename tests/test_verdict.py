@@ -112,6 +112,7 @@ def test_kit_is_phishing_with_strong_combination(tmp_path, env):
     h4 = next(p for t, p in events if t == "hypothesis_update")
     assert h4["id"] == "H4" and h4["status"] == "refuted" and "Refuted" in h4["reason"]
     assert h4["evidence"] == ["checks/destinations.jsonl:1"]
+    assert updates[-1].pop("decided_at")  # the blocklist orders decisions by time
     assert updates[-1] == {"verdict": "Phishing", "decision": "block", "decided_by": "agent"}
     assert next(p for t, p in events if t == "verdict")["decided_by"] == "agent"
 

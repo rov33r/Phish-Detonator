@@ -101,7 +101,7 @@ def test_email_preview_extracts_without_starting_a_scan(client):
     assert response.status_code == 200
     preview = response.json()
     assert preview["links"] == [{
-        "url": "https://destination.example/account", "shown_text": "sender.example",
+        "url": "https://destination.example/account", "shown_text": "sender.example", "blocklist": None,
     }]
     assert [flag["name"] for flag in preview["flags"]] == ["link_text_mismatch"]
     assert client.app.state.scans == {}
@@ -320,3 +320,36 @@ def test_approve_endpoint_reaches_the_waiting_agent(client, monkeypatch):
     assert client.post("/api/scans/live1/approve", json={"visit": "victim", "decision": "deny"}).status_code == 200
     t.join(2)
     assert result["d"] == "denied_by_analyst" and agent.pending("live1") == []
+
+
+def test_rescan_of_a_blocked_link_announces_it_and_still_runs(client, monkeypatch):
+    from app import blocklist, db, main, orchestrator
+    monkeypatch.setenv("PD_FEATURE_ORCHESTRATOR", "1")
+    monkeypatch.setattr(main, "orchestrator_enabled", lambda url: True)
+    monkeypatch.setattr(main, "over_rate_limit", lambda ip: False)
+    monkeypatch.setattr(db, "update_scan", lambda sid, **f: None)
+    events, runs = [], []
+    monkeypatch.setattr(db, "emit", lambda sid, t, p: events.append((t, p)))
+    monkeypatch.setattr(orchestrator, "run_scan", lambda *a: runs.append(a))
+    hit = {"url": "http://kit.test/", "status": "blocked", "scan_id": "old", "verdict": "Phishing",
+           "decided_by": "agent", "decided_at": "2026-11-27T15:40:00+00:00"}
+    monkeypatch.setattr(blocklist, "lookup", lambda url, exclude=None: hit)
+    r = client.post("/api/scans", json={"url": "http://kit.test/"})
+    assert r.status_code == 202 and events == [("blocklist_hit", hit)]
+    import time
+    for _ in range(50):
+        if runs:
+            break
+        time.sleep(0.01)
+    assert runs  # a blocked link is still investigated fresh
+
+
+def test_blocklist_endpoint_and_email_flags(client, monkeypatch):
+    from app import blocklist
+    hit = {"url": "http://kit.test/", "status": "blocked", "scan_id": "old", "verdict": "Phishing",
+           "decided_by": "agent", "decided_at": "t"}
+    monkeypatch.setattr(blocklist, "entries", lambda: [hit])
+    monkeypatch.setattr(blocklist, "lookup", lambda url, exclude=None: hit if "kit.test" in url else None)
+    assert client.get("/api/blocklist").json() == {"entries": [hit]}
+    r = client.post("/api/email-preview", json={"email_text": "See http://kit.test/ and http://ok.test/"})
+    assert [link["blocklist"] for link in r.json()["links"]] == [hit, None]
