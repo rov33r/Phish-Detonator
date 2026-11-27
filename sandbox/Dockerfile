@@ -21,7 +21,7 @@ RUN npm i -g agent-browser@0.43.0 \
 # Chrome 158 upgrades http:// to https:// and ignores --disable-features=HttpsUpgrades. The netlock
 # only lets sandboxes reach the host on port 80, so the upgrade fails as ERR_BLOCKED_BY_CLIENT.
 COPY chrome-policy.json /etc/opt/chrome_for_testing/policies/managed/pd.json
-COPY bot.mjs recorder.mjs victim-start.sh ./
+COPY bot.mjs recorder.mjs netlock.mjs victim-start.sh ./
 RUN chmod 755 victim-start.sh && chmod 644 bot.mjs recorder.mjs \
     && useradd --uid 10001 --create-home --home-dir /home/pd pd
 

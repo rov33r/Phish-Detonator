@@ -2,6 +2,7 @@
 // It must stay connected: CDP overrides last only as long as the session that set them.
 import { appendFileSync, writeFileSync } from 'node:fs';
 import { chromium } from 'playwright';
+import { isLockBlock } from './netlock.mjs';
 
 const OUT = process.env.PD_OUT || '/out';
 const PROFILE = process.env.PD_PROFILE || 'victim';
@@ -75,9 +76,10 @@ context.on('request', (request) => log('network', {
   method: request.method(), url: request.url(), host: hostOf(request.url()),
   resourceType: request.resourceType(), postData: request.postData()?.slice(0, 4096) ?? null,
 }));
-context.on('requestfailed', (request) => log('blocked', {
-  url: request.url(), host: hostOf(request.url()), error: request.failure()?.errorText ?? '',
-}));
+context.on('requestfailed', (request) => {
+  const error = request.failure()?.errorText ?? '';
+  log(isLockBlock(request.url(), error) ? 'blocked' : 'failed', { url: request.url(), host: hostOf(request.url()), error });
+});
 
 await context.addInitScript(probeScript);
 await context.addInitScript(deviceScript, PROFILE === 'victim_mobile');
