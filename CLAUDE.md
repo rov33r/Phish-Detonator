@@ -130,7 +130,7 @@ Trunk-based. `main` is the trunk and must always run, because the VM deploys fro
 1. **Never commit or push to `main` directly.** Branch from the latest `main`, open a PR, merge it.
 2. **One small task per branch**, named `a/<task>`, `b/<task>` or `c/<task>` after the lane. Merge as soon as the task works; do not let a branch grow.
 3. **Before opening a PR:** `git fetch origin && git rebase origin/main`, then run the pre-PR checks (section 5) and fix anything red.
-4. **Merge rules** (enforced on GitHub): PR required, CI check `checks` must pass, branch must be up to date with `main`, squash merge only, linear history, no force-push or deletion of `main`. No review approval is required: the author merges once CI is green.
+4. **Merge rules** (enforced on GitHub): PR required, CI check `checks` must pass, branch must be up to date with `main`, squash merge only, linear history, no force-push or deletion of `main`. No review approval and no automatic review requests: the author merges once CI is green. Reviews are informal: tell the lane owner in team chat when a PR touches their area.
 5. **Shared files and interfaces** (section 6 "Shared", section 7) change only in their own small PR, announced to the team first.
 6. **Unfinished work lands behind a stub or an env flag** (`PD_FEATURE_<NAME>=0`), not on a long-lived branch. A stub keeps its interface and returns a fixed value.
 7. **Sandbox changes:** the `sandbox` workflow builds the image and runs it under gVisor. It is not required (slow), but never merge while it is red.
