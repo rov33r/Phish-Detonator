@@ -101,7 +101,7 @@ def test_visit_summaries(scan):
 def test_evidence_index_lists_citable_signals(scan):
     index, _ = inv.evidence_index(scan)
     assert index["signals"]["S1"]["cite"] == ["victim/network.jsonl:2"]
-    assert index["h4"]["status"] == "refuted" and index["verdict_if_concluded_now"] == "Scam"
+    assert index["h4"]["status"] == "refuted" and index["verdict_if_concluded_now"] == "Phishing"
 
 
 # ---------- next step ----------

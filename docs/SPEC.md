@@ -36,7 +36,7 @@ Phish Detonator is a web app for security analysts. The analyst pastes a suspici
 | Robot visit | See what a security scanner sees | Plain headless Chromium, default flags, no agent |
 | Victim visit | See what a human victim sees | Headful Chromium under Xvfb with de-automation flags; an LLM agent clicks and types; it enters a **decoy identity** into any login form |
 
-The system compares the visits and records where the decoy password was sent. The investigator may dispatch more visits (for example a mobile victim) when the evidence calls for it. Fixed rules verify every claim and produce a verdict: **Scam**, **Suspicious** or **No evidence found**. On Scam the agent blocks the link itself and cites its evidence; the analyst can override with Release.
+The system compares the visits and records where the decoy password was sent. The investigator may dispatch more visits (for example a mobile victim) when the evidence calls for it. Fixed rules verify every claim and produce a verdict: **Phishing**, **Suspicious** or **No evidence found**. On Phishing the agent blocks the link itself and cites its evidence; the analyst can override with Release.
 
 Core claims for judges:
 1. **Cloak Diff:** a page that shows a scanner something different from a victim is hiding. The difference is the evidence.
@@ -361,10 +361,10 @@ Add a few real brands with their owned login domains only, for credibility. Neve
 1. **Compute signals** S1 to S4 and M1 to M4 from the evidence files of all visits, with fixed code.
 2. **Check claims.** For each investigator claim: every `cite` must exist, and the cited line or file must support the claimed signal (an S1 claim must cite a `network.jsonl` line that contains the decoy in plain, URL-encoded or base64 form; an S2 claim must cite `robot.json` and an `agent.jsonl` line; and so on). A claim whose signal the code did not also compute, or whose citation does not support it, is rejected and emitted as `claim_rejected` with the reason.
 3. **Verdict from verified signals only:**
-   - **Scam:** S1 and at least one of S2, S4 or M4. A password leaving to a third party is only a scam when the page also lies (shows a brand it does not own, hides from scanners, or hands the victim back to the real brand).
+   - **Phishing:** S1 and at least one of S2, S4 or M4. A password leaving to a third party is only phishing when the page also lies (shows a brand it does not own, hides from scanners, or hands the victim back to the real brand).
    - Else **Suspicious:** S1 alone, or two or more of S2, S4, M1 to M5.
    - Else **No evidence found**. Never output "safe". S3 is shown as context and never counts.
-4. **Action.** Only when H4 is refuted (8.5). On Scam with `action: "block"` from the investigator (or from the fallback), the scan's `decision` is set to `block` by the agent (`decided_by: "agent"`). The analyst can override with Release (`decided_by: "analyst"`).
+4. **Action.** Only when H4 is refuted (8.5). On Phishing with `action: "block"` from the investigator (or from the fallback), the scan's `decision` is set to `block` by the agent (`decided_by: "agent"`). The analyst can override with Release (`decided_by: "analyst"`).
 
 `verdict.json`: `{verdict, reasons: [{signal, text, evidence: [file or line refs]}], rejected_claims: [{claim, reason}], decoy: {email, password_masked}, robot_final_url, victim_login_host, password_sent_to: [hosts], blocked_requests: [{host, url}], hypotheses: [{id, text, status}], action_taken, untested: [text]}`.
 
@@ -374,7 +374,7 @@ Before blocking, code checks every host that received the decoy password and wri
 - `brand_owned`: host in the brand's list in `brands.json`.
 - `login_provider`: host matches `brands.json` `login_providers`, by login host, not whole domain (`accounts.google.com`, `login.microsoftonline.com`, `*.okta.com`, `*.auth0.com`, `*.onelogin.com`, `*.amazoncognito.com`, `*.b2clogin.com`). `docs.google.com` and `forms.office.com` are not login providers: password-collecting forms there stay suspicious.
 - `followup` (optional): the investigator may run `robot_followup` on the host. A real vendor serves a real site; a collector returns an empty page or 204. The summary is cited, not trusted.
-H4 is **refuted** when at least one password destination fails all three checks; code emits `hypothesis_update` for H4 with the reason in first person ("Could cdn-metrics be a login provider? It is not a known provider and Vexalo does not own it.") and cites `checks/destinations.jsonl:<line>`. Otherwise H4 is **supported** and the verdict cannot be Scam.
+H4 is **refuted** when at least one password destination fails all three checks; code emits `hypothesis_update` for H4 with the reason in first person ("Could cdn-metrics be a login provider? It is not a known provider and Vexalo does not own it.") and cites `checks/destinations.jsonl:<line>`. Otherwise H4 is **supported** and the verdict cannot be Phishing.
 
 ## 9. Test Sites (Fixtures)
 
@@ -398,15 +398,15 @@ One small FastAPI app on port 8081, routed by Caddy using the `Host` header. Pla
 Same stages, but stage 1 shows "This document can only be opened on a phone" unless `navigator.maxTouchPoints > 0` and the user agent contains `Android` or `iPhone`. The desktop victim reaches nothing; the investigator should dispatch `victim_mobile`, which reaches the login. This is the demo proof that the plan adapts to evidence.
 
 ### 9.2 Legit site
-Same Vexalo look. Form posts to its own host. No gate, no cloaking. It runs a harmless bot-protection script that reads `navigator.webdriver` (as Cloudflare or reCAPTCHA do), so A5 proves S3 alone does not make a scam.
+Same Vexalo look. Form posts to its own host. No gate, no cloaking. It runs a harmless bot-protection script that reads `navigator.webdriver` (as Cloudflare or reCAPTCHA do), so A5 proves S3 alone does not mean phishing.
 
 ### 9.3 Expected results
 | Input | Expected verdict | Signals |
 |---|---|---|
 | Legit link | No evidence found | S3 and M3 shown as context; H4 supported |
-| Kit link | Scam | S1, S2, S4, M4 (plus S3, M1, M3, M5); H4 refuted; three blocked requests |
+| Kit link | Phishing | S1, S2, S4, M4 (plus S3, M1, M3, M5); H4 refuted; three blocked requests |
 | Bomb link (`/bomb`) | Suspicious | M3, M5; `resource_limit_hit`; host load flat |
-| Mobile-only kit link | Scam | Investigator dispatches `victim_mobile`; H3 supported; S1 from the mobile visit |
+| Mobile-only kit link | Phishing | Investigator dispatches `victim_mobile`; H3 supported; S1 from the mobile visit |
 
 ### 9.4 BotD page
 `vexalo-docs.<IP>.nip.io/botd` loads BotD from its CDN (`https://openfpcdn.io/botd/v1`, VERIFY) and prints the `detect()` result as JSON in a `<pre id="result">`. Scoreboard job runs the robot profile and the victim profile against it.
@@ -585,12 +585,12 @@ Acceptance tests (all must pass before feature freeze):
 | A3 | Password trail | `decoy_sent` event names `cdn-metrics.<IP>.sslip.io` |
 | A4 | Probes | `probes.jsonl` contains `webdriver` for the kit run |
 | A5 | Legit URL | Verdict "No evidence found" although the page reads `navigator.webdriver` (S3) |
-| A6 | Kit URL | Verdict "Scam" with S1 and S2, S4, M4; H4 refuted with a `checks/destinations.jsonl` cite |
+| A6 | Kit URL | Verdict "Phishing" with S1 and S2, S4, M4; H4 refuted with a `checks/destinations.jsonl` cite |
 | A7 | Lifecycle | `docker ps -a` shows no `pd-` containers 10 s after a scan |
 | A8 | Network lock | From a sandbox, `curl http://169.254.169.254/` and `curl http://<VM IP>:8000` fail |
 | A9 | Scoreboard | Robot `bot: true`, victim `bot: false` |
 | A10 | Inference | `/api/health` shows the Vultr model ID; no other LLM endpoint in code (`grep`) |
-| A11 | Investigator adapts | Mobile-only kit: investigator dispatches `victim_mobile`, verdict Scam, H3 supported, 3 runs of 3 |
+| A11 | Investigator adapts | Mobile-only kit: investigator dispatches `victim_mobile`, verdict Phishing, H3 supported, 3 runs of 3 |
 | A12 | Containment on screen | Kit run: `blocked.jsonl` has the metadata, gateway and app attempts; UI shows them |
 | A13 | Claim check | Unit test: a claim citing a line without the decoy is rejected with `claim_rejected` |
 | A14 | Public URL caps | 5 scans started at once: at most 2 run, the rest queue; 6th scan from one IP in 10 minutes gets 429 |
@@ -600,7 +600,7 @@ Acceptance tests (all must pass before feature freeze):
 | A18 | Resource bomb | `/bomb` scan: `resource_limit_hit` emitted, verdict Suspicious with M5, `docker ps -a` clean, host load stays under 2 |
 | A19 | Stats | `sandbox_stats` events arrive once per second; `/api/stats` totals match `docker` history |
 | A20 | Approval gate | Kit run: an `approval` event with `auto_approved` comes before `decoy_sent`; unit test: a submit after typing a non-placeholder value is `denied` |
-| A21 | False positives | Unit tests, none is Scam: probes only; login page posts to its own API host; password goes to `acme.okta.com`; robot gets a challenge page; email-only leak; password to a third party with no S2, S4 or M4 (Suspicious) |
+| A21 | False positives | Unit tests, none is Phishing: probes only; login page posts to its own API host; password goes to `acme.okta.com`; robot gets a challenge page; email-only leak; password to a third party with no S2, S4 or M4 (Suspicious) |
 
 ## 17. Demo Script
 
@@ -610,7 +610,7 @@ Acceptance tests (all must pass before feature freeze):
 | 0:20 | Preset "Legit Vexalo" | "First, a real login page." Verdict: No evidence found. |
 | 0:45 | Preset "Phishing kit" | The investigator writes its plan. Split screen: robot sees a news page; the live screen shows the victim passing the gate and the bot check. |
 | 1:20 | Containment panel | The page tries the cloud metadata endpoint and the host: three requests blocked. "The page attacked the sandbox. Nothing got out." |
-| 1:40 | Password trail | "The decoy password went here. Vexalo does not own this host." The agent concludes Scam, cites evidence, blocks the link. |
+| 1:40 | Password trail | "The decoy password went here. Vexalo does not own this host." The agent concludes Phishing, cites evidence, blocks the link. |
 | 2:00 | Preset "Mobile-only kit" | Desktop victim sees nothing. Investigator: "Desktop got nothing. I'll try as a phone." A new sandbox appears; the mobile visit reaches the login. |
 | 2:20 | Preset "Resource bomb" | The sandbox memory bar climbs to the 2 GB cap and the visit is killed; the host load next to it stays flat. "The page tried to take the machine down. It took down a disposable box." |
 | 2:35 | Signed report | Download the report, change one byte, `/api/verify` flags it. "Every claim has a receipt, and the receipts are signed." |

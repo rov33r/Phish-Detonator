@@ -101,10 +101,10 @@ def test_decoy_not_found():
 
 # ---------- A6: the kit ----------
 
-def test_kit_is_scam_with_strong_combination(tmp_path, env):
+def test_kit_is_phishing_with_strong_combination(tmp_path, env):
     r = run(tmp_path, **kit_scan())
     signals = {x["signal"] for x in r["reasons"]}
-    assert r["verdict"] == "Scam"
+    assert r["verdict"] == "Phishing"
     assert {"S1", "S2", "S4", "M4", "M1", "M3", "M5", "S3"} <= signals
     assert r["password_sent_to"] == [COLLECTOR]
     assert r["action_taken"] == "blocked" and r["h4"]["status"] == "refuted"
@@ -112,7 +112,7 @@ def test_kit_is_scam_with_strong_combination(tmp_path, env):
     h4 = next(p for t, p in events if t == "hypothesis_update")
     assert h4["id"] == "H4" and h4["status"] == "refuted" and "Refuted" in h4["reason"]
     assert h4["evidence"] == ["checks/destinations.jsonl:1"]
-    assert updates[-1] == {"verdict": "Scam", "decision": "block", "decided_by": "agent"}
+    assert updates[-1] == {"verdict": "Phishing", "decision": "block", "decided_by": "agent"}
     assert next(p for t, p in events if t == "verdict")["decided_by"] == "agent"
 
 
@@ -126,7 +126,7 @@ def test_kit_writes_evidence_files(tmp_path):
 
 def test_investigator_can_decline_to_block(tmp_path):
     r = vd.decide("s", scan_dir=write_scan(tmp_path / "s", **kit_scan()), action="none", run_brand_check=False)
-    assert r["verdict"] == "Scam" and r["action_taken"] == "none"
+    assert r["verdict"] == "Phishing" and r["action_taken"] == "none"
 
 
 # ---------- A5 and A21: false positives ----------
@@ -158,7 +158,7 @@ def test_login_provider_is_not_s1_even_with_content_swap(tmp_path):
             agent=[step(1, "https://acme.okta.com/login", "Okta sign in", True, "Acme")],
             network=[{"ts": 5, "method": "POST", "url": "https://acme.okta.com/api/v1/authn",
                       "host": "acme.okta.com", "postData": json.dumps(DECOY)}])
-    assert r["verdict"] != "Scam" and "S1" not in {x["signal"] for x in r["reasons"]}
+    assert r["verdict"] != "Phishing" and "S1" not in {x["signal"] for x in r["reasons"]}
     assert r["h4"]["status"] == "supported"
 
 
@@ -180,7 +180,7 @@ def test_email_only_leak_is_a_fact_not_a_signal(tmp_path):
     assert r["email_shared_with"] == ["analytics.example.net"]
 
 
-def test_third_party_password_alone_is_suspicious_not_scam(tmp_path):
+def test_third_party_password_alone_is_suspicious_not_phishing(tmp_path):
     r = run(tmp_path, robot={"final_url": "https://shop.example.com/", "has_password_field": True, "status": 200},
             agent=[step(1, "https://shop.example.com/login", "Login form", True)],
             network=[{"ts": 5, "method": "POST", "url": "https://forms-vendor.com/submit",
@@ -191,14 +191,14 @@ def test_third_party_password_alone_is_suspicious_not_scam(tmp_path):
 
 def test_google_forms_is_not_whitelisted(tmp_path):
     r = run(tmp_path, **kit_scan(post_host="docs.google.com"))
-    assert r["password_sent_to"] == ["docs.google.com"] and r["verdict"] == "Scam"
+    assert r["password_sent_to"] == ["docs.google.com"] and r["verdict"] == "Phishing"
 
 
 def test_no_password_sent_leaves_h4_open(tmp_path):
     scan = kit_scan()
     scan["network"] = scan["network"][:1]
     r = run(tmp_path, **scan)
-    assert r["h4"]["status"] == "open" and r["verdict"] != "Scam"
+    assert r["h4"]["status"] == "open" and r["verdict"] != "Phishing"
 
 
 # ---------- A13: claim checks ----------
@@ -244,7 +244,7 @@ def test_brand_check_result_drives_s4(tmp_path, monkeypatch):
     r = vd.decide("s", scan_dir=scan)
     assert "<untrusted_page>" in calls[0]
     assert json.loads((scan / "victim" / "brand.json").read_text())["model"] == "eye-model"
-    assert r["brand_shown"] == "Vexalo" and r["verdict"] == "Scam"
+    assert r["brand_shown"] == "Vexalo" and r["verdict"] == "Phishing"
 
 
 def test_brand_check_failure_falls_back(tmp_path, monkeypatch):

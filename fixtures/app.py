@@ -231,7 +231,7 @@ LOGO = ('<div class="logo"><svg width="28" height="28" viewBox="0 0 28 28" aria-
         '<path d="M3 4h6l5 13 5-13h6L17 24h-6z" fill="#0f5cc0"/></svg><span>Vexalo</span></div>')
 
 # Legit sites run bot protection too (Cloudflare, reCAPTCHA): it reads webdriver and does
-# nothing visible. Proves S3 alone is not a scam (SPEC 9.2, A5).
+# nothing visible. Proves S3 alone is not phishing (SPEC 9.2, A5).
 BOT_PROTECTION = """<script>
 window.__vexaloBotScore = navigator.webdriver ? 1 : 0;
 </script>"""

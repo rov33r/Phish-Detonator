@@ -324,7 +324,7 @@ def analyze(visits: dict[str, Visit], decoy: dict, brands: dict) -> Analysis:
 
 def verdict_of(signals) -> str:
     if "S1" in signals and any(s in signals for s in STRONG):
-        return "Scam"
+        return "Phishing"
     if "S1" in signals or sum(s in signals for s in COUNTED) >= 2:
         return "Suspicious"
     return "No evidence found"
@@ -468,7 +468,7 @@ def decide(scan_id: str, claims: list[dict] | None = None, *, action: str = "blo
         _emit(scan_id, "claim_rejected", r)
 
     verdict = verdict_of(an.signals)
-    blocked = verdict == "Scam" and action == "block" and an.h4 == "refuted"
+    blocked = verdict == "Phishing" and action == "block" and an.h4 == "refuted"
     order = ["S1", "S2", "S4", "M4", "M1", "M2", "M3", "M5", "S3"]
     reasons = [{"signal": s, "text": an.reasons[s], "evidence": an.signals[s]} for s in order if s in an.signals]
     password = decoy.get("password", "")

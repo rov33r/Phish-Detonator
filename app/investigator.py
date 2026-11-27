@@ -95,7 +95,7 @@ Tools (exactly one per answer):
 - victim_retry: a desktop victim visit with one extra goal ("goal", max 120 chars), for a step
   the last victim visit could not get past.
 - conclude: end the case. Give "claims" (each with "signal" set to the signal id such as "S1",
-  and "cite" copied exactly from the index), "action" ("block" only if the evidence shows a scam, else "none"), and "untested"
+  and "cite" copied exactly from the index), "action" ("block" only if the evidence shows phishing, else "none"), and "untested"
   (what you could not test).
 Rules:
 - Write every "reason" in first person, max 25 words, for example "I send a phone because the
@@ -315,7 +315,7 @@ def fallback_conclude(scan_id: str, *, scan_dir: pathlib.Path | None = None, an=
         _, an = evidence_index(scan_dir)
     claims = [{"hypothesis": SIGNAL_HYPOTHESIS.get(s, "H2"), "signal": s, "text": an.reasons[s],
                "cite": cites[:2]} for s, cites in an.signals.items()]
-    args = {"claims": claims, "action": "block" if verdict.verdict_of(an.signals) == "Scam" else "none",
+    args = {"claims": claims, "action": "block" if verdict.verdict_of(an.signals) == "Phishing" else "none",
             "untested": ["Planner unavailable, rules only"]}
     reason = "Planner unavailable, rules only: I conclude from the signals code found."
     _log(scan_dir, {"type": "tool", "tool": "conclude", "args": args, "reason": reason, "fallback": True})
