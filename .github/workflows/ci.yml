@@ -18,6 +18,7 @@ jobs:
       VULTR_INFERENCE_KEY: ci-dummy
       PD_MODEL: ci-dummy
       PD_PUBLIC_IP_DASHED: 127-0-0-1
+      PD_E2E_REQUIRED: "1"  # browser tests fail instead of skip when Chromium is missing
     steps:
       - uses: actions/checkout@v4
         with:
@@ -37,6 +38,9 @@ jobs:
 
       - name: Repo rules (CLAUDE.md)
         run: bash scripts/check_rules.sh
+
+      - name: Browser for end-to-end tests
+        run: python -m playwright install --with-deps --only-shell chromium
 
       - name: Tests
         run: pytest -q
