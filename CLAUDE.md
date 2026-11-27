@@ -4,7 +4,7 @@
 
 Hackathon build, 27 Nov 2026 (Vultr Agent Runtime Hackathon, Stockholm). Three developers, three lanes, one trunk (`main`). Deadline: see `docs/KICKOFF.md` section 1.
 
-Phish Detonator opens a suspicious link two times in gVisor sandboxes (robot visit and victim visit), tracks where a decoy password goes, and returns a verdict with evidence.
+Phish Detonator investigates a suspicious link. An investigator agent writes a plan with hypotheses, dispatches visits to fresh gVisor sandboxes (always a robot visit and a victim visit, then follow-ups it chooses, such as a mobile victim), tracks where a decoy password goes, and concludes with claims that code verifies against the evidence. On Scam the agent blocks the link itself; the analyst can override.
 
 **Source of truth: `docs/SPEC.md`.** Read the sections named in the task before writing code. If the spec and this file disagree, this file wins.
 
@@ -41,7 +41,13 @@ Reference code that produced these results: `reference/spike/`.
 1. **agent-browser `--cdp 9222` attach to our own headful Chrome** inside a gVisor container. Test commands: `docs/KICKOFF.md` section 5. Fallback: `sandbox/act.mjs` with Playwright `connectOverCDP` (SPEC 5.6).
 2. **Browser install path for a non-root user.** The spike image installed browsers as root, under `/root`, which uid 10001 cannot read. Set `ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright` before `npx playwright install`, and check where `agent-browser install` puts Chrome (make it readable or install as the `pd` user).
 3. ~~`agent-browser --help`: confirm command names.~~ Checked on v0.43.0: `open`, `snapshot`, `click`, `type`, `fill`, `hover`, `press`, `scroll`, `wait`, `screenshot`, `eval`, `get <what>` and `--cdp <port>` exist. `--pin-tab` pins the session to its own tab (use it so the recorder and CDP overrides stay on the same page).
-4. Vultr model IDs: `GET /v1/models`, then 10 JSON test calls.
+4. Vultr model IDs: `GET /v1/models`, then 10 JSON test calls. Pick a vision model for the brand check too.
+
+Spec bugs already fixed in `docs/SPEC.md` (implement them as written, do not "simplify" them away):
+- **Kit landing page runs the bot check** (SPEC 9.1 stage 1). The robot never clicks, so without it A1 fails.
+- **Collector answers the CORS preflight** (SPEC 9.1 stage 4). Without it the browser never sends the decoy POST and S1 fails.
+- **Network lock uses the INPUT chain and REJECT** (SPEC 5.7). DOCKER-USER does not see traffic to the VM's own IP, so A8 would pass by accident or fail. Uvicorn binds `127.0.0.1`.
+- **Recorder covers every page** (SPEC 5.5) and agent-browser uses `--pin-tab`, so CDP overrides and probes are not lost on a new tab.
 
 ## 5. Commands
 
@@ -64,13 +70,13 @@ Each lane owns its files. Touch the other lane's files only through the interfac
 | Lane | Developer | Owns |
 |---|---|---|
 | **A: the box** (sandbox, infra, evidence) | PranavC225 | `sandbox/`, `deploy/`, `app/sandbox.py`, `app/orchestrator.py`, `app/storage.py`, `app/vultr_api.py` |
-| **B: the brain** (agent, verdict, fixtures) | rov33r | `fixtures/`, `app/llm.py`, `app/agent.py`, `app/verdict.py`, `app/brands.json` |
+| **B: the brain** (investigator, agent, verdict, fixtures) | rov33r | `fixtures/`, `app/llm.py`, `app/investigator.py`, `app/agent.py`, `app/verdict.py`, `app/brands.json` |
 | **C: the face** (UI, live workflow, demo) | BEKtesfish | `app/main.py`, `app/templates/`, `app/static/`, scoreboard, demo presets, `README.md`, `docs/architecture.png`, video |
 | Shared (agree before changing) | all | `app/db.py`, `app/config.py`, `.env.example`, `docs/EVENTS.md`, `CLAUDE.md`, `.github/`, `scripts/`, `requirements*.txt`, `pyproject.toml` |
 
 Each lane owns the tests for its files (`tests/test_<module>.py`).
 
-Judging focus: a polished product where the workflow is visible on screen, and an agent that takes on a real task and owns its decisions. Lane C makes every step visible (plan, sandboxes created, each agent step with its first-person reason and screenshot, evidence, verdict, sandboxes destroyed). Lane B makes the agent decide: on Scam it blocks on its own and cites its evidence; the analyst can override.
+Judging focus: a polished product where the workflow is visible on screen, and an agent that takes on a real task and owns its decisions. Lane C makes every step visible (plan and hypotheses, each sandbox dispatched and destroyed with the investigator's reason, each agent step with its screenshot, blocked attacks, evidence, verdict, rejected claims). Lane B makes the agent own the case (SPEC 6A): it plans, adapts the plan to evidence, picks follow-up visits, and blocks on Scam with cited evidence; code verifies every claim (SPEC 8.4).
 
 ## 7. Interfaces (write these stubs first, then build behind them)
 
@@ -80,19 +86,27 @@ def emit(scan_id: str, type: str, payload: dict) -> None: ...      # insert into
 def update_scan(scan_id: str, **fields) -> None: ...
 
 # app/sandbox.py (Lane A)
-def start_visit(scan_id: str, visit: str) -> str: ...               # visit in {"robot", "victim"}; returns container name
+def start_visit(scan_id: str, visit: str, profile: str) -> str: ... # visit: unique label ("robot", "victim", "victim_mobile-3");
+                                                                    # profile in {"robot", "victim", "victim_mobile"}; returns container name
 def exec_in(container: str, args: list[str], timeout: int = 30) -> tuple[int, str]: ...
 def stop_visit(container: str) -> None: ...                         # docker rm -f, always called in finally
 def out_dir(scan_id: str, visit: str) -> pathlib.Path: ...          # host path mounted at /out
 
 # app/agent.py (Lane B)
-def run_victim(scan_id: str, url: str, container: str, decoy: dict) -> dict: ...  # uses sandbox.exec_in + db.emit
+def run_victim(scan_id: str, url: str, container: str, decoy: dict, goal: str | None = None) -> dict: ...
+                                                                    # uses sandbox.exec_in + db.emit; goal from victim_retry
+
+# app/investigator.py (Lane B, SPEC 6A)
+def plan(scan_id: str, url: str) -> dict: ...                       # {"hypotheses": [{id, text, status}]}
+def next_step(scan_id: str, summaries: list[dict]) -> dict: ...     # one validated tool call: {"tool", "args", "reason", "hypotheses"}
 
 # app/verdict.py (Lane B)
-def decide(scan_id: str) -> dict: ...                               # reads out_dir files, returns verdict.json content
+def decide(scan_id: str, claims: list[dict] | None = None) -> dict: ...  # computes signals, checks claims, returns verdict.json content
 
 # app/orchestrator.py (Lane A)
-def run_scan(scan_id: str, url: str, mode: str) -> None: ...        # robot + victim in parallel, then decide, upload, cleanup
+def run_scan(scan_id: str, url: str, mode: str) -> None: ...        # plan, round 1 (robot + victim in parallel), investigator loop,
+                                                                    # decide, upload, cleanup; respects caps and budget
+def dispatch(scan_id: str, tool: dict) -> dict: ...                 # runs one investigator tool in a fresh sandbox; returns visit summary
 ```
 
 **Event contract (B and A emit, C renders).** Every event type from SPEC 10 and its exact `payload` shape is listed in `docs/EVENTS.md`. Add or change an event there, in its own PR, before emitting it. Lane C builds the UI against a replay of fake events that match `docs/EVENTS.md`, so it never waits for the real agent.

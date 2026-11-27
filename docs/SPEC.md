@@ -1,6 +1,6 @@
 # Phish Detonator: Build Spec for AI Assistants
 
-Version 1, 26 Nov 2026. Target: Vultr Agent Runtime Hackathon, 27 Nov 2026, 09:00 to 21:00 CET, Netlight Stockholm. Team of 2.
+Version 1, 26 Nov 2026. Target: Vultr Agent Runtime Hackathon, 27 Nov 2026, 09:00 to 21:00 CET, Netlight Stockholm. Team of 3 (lanes in CLAUDE.md section 6).
 
 ## Table of Contents
 1. [Overview](#1-overview)
@@ -9,6 +9,7 @@ Version 1, 26 Nov 2026. Target: Vultr Agent Runtime Hackathon, 27 Nov 2026, 09:0
 4. [Architecture](#4-architecture)
 5. [Components](#5-components)
 6. [Agent Loop](#6-agent-loop)
+6A. [Investigator: Planning and Dispatch](#6a-investigator-planning-and-dispatch)
 7. [Human Mimicry](#7-human-mimicry)
 8. [Evidence and Verdict](#8-evidence-and-verdict)
 9. [Test Sites (Fixtures)](#9-test-sites-fixtures)
@@ -27,19 +28,21 @@ Version 1, 26 Nov 2026. Target: Vultr Agent Runtime Hackathon, 27 Nov 2026, 09:0
 
 ## 1. Overview
 
-Phish Detonator is a web app for security analysts. The analyst pastes a suspicious link. The system opens the link two times, each time in a new gVisor sandbox:
+Phish Detonator is a web app for security analysts. The analyst pastes a suspicious link. An **investigator agent** takes the case: it writes a plan with hypotheses, dispatches visits to fresh gVisor sandboxes, reads what comes back, decides which follow-up visits to run, and concludes with cited claims that code verifies (section 6A). Every scan starts with two visits:
 
 | Visit | Purpose | How |
 |---|---|---|
 | Robot visit | See what a security scanner sees | Plain headless Chromium, default flags, no agent |
 | Victim visit | See what a human victim sees | Headful Chromium under Xvfb with de-automation flags; an LLM agent clicks and types; it enters a **decoy identity** into any login form |
 
-The system compares the two visits and records where the decoy password was sent. Fixed rules produce a verdict: **Scam**, **Suspicious** or **No evidence found**. The analyst selects Block or Release.
+The system compares the visits and records where the decoy password was sent. The investigator may dispatch more visits (for example a mobile victim) when the evidence calls for it. Fixed rules verify every claim and produce a verdict: **Scam**, **Suspicious** or **No evidence found**. On Scam the agent blocks the link itself and cites its evidence; the analyst can override with Release.
 
 Core claims for judges:
 1. **Cloak Diff:** a page that shows a scanner something different from a victim is hiding. The difference is the evidence.
 2. **Password trail:** the decoy password is tracked to the exact host that received it.
 3. **Measured mimicry:** the open-source bot detector BotD flags the robot profile and passes the victim profile.
+4. **An agent that owns the case:** it plans, adapts its plan to evidence, dispatches its own sandboxes, and takes the block decision. It cannot invent a verdict: code checks every citation.
+5. **Visible containment:** a hostile page tries to reach the cloud metadata endpoint and the host; the UI shows each attempt blocked.
 
 Track: Pattern B (sandboxed browser use).
 
@@ -60,7 +63,7 @@ Track: Pattern B (sandboxed browser use).
 |---|---|
 | Web-based agent that does real work (code or browser) | Agent operates a real browser through a phishing flow |
 | Every action in a sandbox on Vultr | Both visits run in gVisor containers on a Vultr VM; high-risk mode uses a throwaway Vultr VM |
-| Plan, dispatch to isolated environments, return verifiable output | Orchestrator plans two visits, dispatches each to a fresh sandbox, returns an evidence bundle |
+| Plan, dispatch to isolated environments, return verifiable output | Investigator agent writes a plan, adapts it to evidence, dispatches each visit to a fresh sandbox; every claim cites evidence and is checked by code (6A) |
 | Vultr VM as backend and orchestration | FastAPI app on Vultr Cloud Compute |
 | Vultr Serverless Inference for all LLM calls | OpenAI SDK with `base_url=https://api.vultrinference.com/v1` |
 | Sandbox never inside the app process | Docker with `--runtime=runsc` |
@@ -78,7 +81,8 @@ Caddy (TLS for the app host; plain HTTP for fixture hosts)
    |
 FastAPI app (systemd, host)                         [trusted zone]
    |-- llm.py         -> Vultr Serverless Inference
-   |-- orchestrator   -> starts robot + victim runs in parallel
+   |-- investigator   -> plan, hypotheses, picks follow-up visits, cited claims (6A)
+   |-- orchestrator   -> round 1: robot + victim in parallel; then dispatches investigator tools
    |-- sandbox.py     -> docker CLI, --runtime=runsc, network pd-net
    |-- agent.py       -> loop: observe (snapshot) -> decide (LLM) -> act (docker exec agent-browser)
    |-- verdict.py     -> fixed rules over evidence
@@ -94,7 +98,7 @@ FastAPI app (systemd, host)                         [trusted zone]
                                            + agent-browser attached via --cdp
                                            + recorder.mjs attached via CDP (network, navigations, probes)
 
-Fixtures app (host, port 8081, behind Caddy by Host header): legit Vexalo site, phishing kit, collector, BotD page
+Fixtures app (host, port 8081, behind Caddy by Host header): legit Vexalo site, phishing kit (desktop and mobile-only), collector, BotD page
 ```
 
 Trust rules:
@@ -148,32 +152,44 @@ Connects with `chromium.connectOverCDP('http://127.0.0.1:9222')` before the agen
 3. Log to `/out/network.jsonl` one line per `request` event: `{ts, method, url, host, resourceType, postData}` (postData truncated to 4 KB).
 4. Log main-frame navigations to `/out/navigations.jsonl`.
 5. Log `__PD_PROBE` console lines to `/out/probes.jsonl`.
+6. Log failed requests (`requestfailed`, for example `net::ERR_CONNECTION_REFUSED` from the network lock) to `/out/blocked.jsonl`: `{ts, url, host, error}`.
+7. Apply the visit profile from env `PD_PROFILE` (`victim` or `victim_mobile`, section 6A.4) before the first navigation.
+8. Apply all overrides and the probe script to every page in the context (`context.on('page')`), not only the first one. agent-browser runs with `--pin-tab` so it stays on one tab.
 Runs until the host kills the container.
 
 ### 5.6 agent-browser usage
-Host runs commands as `docker exec pd-<scan>-victim agent-browser --cdp 9222 <command>`. Commands used:
+Host runs commands as `docker exec pd-<scan>-<visit> agent-browser --cdp 9222 --pin-tab <command>`. Command names checked on agent-browser 0.43.0. Commands used:
 | Command | Use |
 |---|---|
 | `open <url>` | First navigation only |
 | `snapshot -i` | Observation: interactive elements with refs `@eN` |
 | `click @eN` | Click |
-| `fill @eN "<text>"` or `type @eN "<text>"` | Text entry; prefer `type` if it exists (VERIFY with `agent-browser --help`) |
+| `type @eN "<text>"` | Text entry, key by key (`fill` also exists: clear and fill) |
 | `hover @eN` | Before every click (mouse movement) |
 | `press Enter` | Submit |
 | `screenshot /out/step-NN.png` | After every action |
-| `get url` / `get title` | State (VERIFY exact command names) |
+| `get url` / `get title` | State |
 
 If agent-browser cannot attach or run under gVisor: fallback runner `act.mjs` that implements the same five actions with Playwright over CDP, using `page.locator('body').ariaSnapshot()` for observation and its own ref map.
 
 ### 5.7 Network lock (`deploy/netlock.sh`)
 ```
 docker network create --driver bridge --subnet 172.30.0.0/24 pd-net
-for net in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16 100.64.0.0/10 127.0.0.0/8; do
-  iptables -I DOCKER-USER -s 172.30.0.0/24 -d $net -j DROP
+
+# Traffic to other machines is forwarded and passes DOCKER-USER.
+for net in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16 100.64.0.0/10; do
+  iptables -I DOCKER-USER -s 172.30.0.0/24 -d $net -j REJECT
 done
-iptables -I DOCKER-USER -s 172.30.0.0/24 -d <VM public IP> -j DROP
+
+# Traffic to the host itself (its public IP, the gateway 172.30.0.1) goes through INPUT, not DOCKER-USER.
+iptables -I INPUT -s 172.30.0.0/24 -j REJECT
+iptables -I INPUT -s 172.30.0.0/24 -p tcp --dport 80 -j ACCEPT   # fixtures only; inserted last, so it is checked first
 ```
-The fixture hosts resolve to the VM public IP, which this rule blocks. Therefore add an exception for the fixture port only: `iptables -I DOCKER-USER -s 172.30.0.0/24 -d <VM public IP> -p tcp --dport 80 -j ACCEPT` (inserted after the drop so it lands first in the chain; VERIFY rule order with `iptables -L DOCKER-USER -n --line-numbers`). The app's port 443 and SSH stay unreachable from sandboxes.
+Why INPUT: a packet from a container to the VM's own IP is delivered locally and never reaches the FORWARD chain, so a DOCKER-USER rule for the VM IP has no effect. Port 443 (app), 8000 (uvicorn) and SSH stay unreachable from sandboxes. In addition, uvicorn binds `127.0.0.1` only; Caddy proxies to it.
+
+Use `REJECT`, not `DROP`: a rejected request fails at once, so the recorder logs it as blocked (`blocked.jsonl`, event `request_blocked`) within the visit time limit, and the UI can show it. Docker enables bridge netfilter, so the `172.16.0.0/12` rule also stops sandboxes from reaching each other.
+
+VERIFY rule order with `iptables -L INPUT -n --line-numbers` and `iptables -L DOCKER-USER -n --line-numbers`.
 
 ## 6. Agent Loop
 
@@ -220,7 +236,51 @@ Host replaces `{{DECOY_EMAIL}}` and `{{DECOY_PASSWORD}}` before the command runs
 Per scan: email `<first>.<last>.<6 hex>@<random word>-mail.com` and password of 16 random characters (letters, digits, one symbol). Store both in the scan record. Values are unique per scan, so a string match in `network.jsonl` proves where they went. Also match URL-encoded and base64 forms.
 
 ### 6.5 Model choice
-At 09:00, `GET https://api.vultrinference.com/v1/models` with the inference key. Pick the strongest text model that returns valid JSON for 10 of 10 test calls on the kit fixture. Keep a second model ID in `PD_MODEL_FALLBACK`. A vision model is optional and only used for the brand check (8.3) if available.
+At 09:00, `GET https://api.vultrinference.com/v1/models` with the inference key. Pick the strongest text model that returns valid JSON for 10 of 10 test calls on the kit fixture. Keep a second model ID in `PD_MODEL_FALLBACK`. Vultr offers vision-capable models: pick one for `PD_VISION_MODEL` and use it for the brand check (8.3).
+
+## 6A. Investigator: Planning and Dispatch
+
+The investigator is the agent that owns the case. The victim agent (section 6) operates one browser; the investigator decides which visits to run, what they prove, and what to do about the link. All its text (plan, reasons, claims) is first person, short, and shown live in the UI.
+
+### 6A.1 Flow
+1. **Plan.** One LLM call with the URL only. Output: hypotheses (max 5) as `{id, text, status: "open"}`. Always include H1 "The page hides from scanners", H2 "Credentials go to a host the brand does not own", H3 "The trap only shows for some visitors (device or region)". Emit `plan`.
+2. **Round 1 (fixed).** Robot visit and desktop victim visit in parallel (5.3, section 6). Round 1 never depends on the planner, so every scan produces evidence.
+3. **Review.** The host builds one summary per finished visit: final URL, title, login reached, decoy sent to (hosts), probes, blocked requests, last agent reason. Page-derived text stays inside `<untrusted_page>`. The investigator answers with exactly one tool call (6A.2) and updates hypothesis statuses (`open`, `supported`, `refuted`). Emit `hypothesis_update` for each change.
+4. **Round 2 and later (the agent decides).** The host validates the tool call, `orchestrator.dispatch` runs it in a fresh sandbox, emits `dispatch`, and returns the new summary. Repeat from step 3.
+5. **Conclude.** Tool `conclude` with claims (6A.3). `verdict.decide` verifies every claim (8.4). Emit `verdict`.
+
+### 6A.2 Tool menu
+| Tool | Args | Effect |
+|---|---|---|
+| `victim_mobile` | `{reason}` | Victim visit with the mobile profile (6A.4) |
+| `robot_followup` | `{host, reason}` | Robot visit to `http://<host>/`; `host` must appear in this scan's `network.jsonl` |
+| `victim_retry` | `{goal, reason}` | Desktop victim visit with one extra goal (max 120 chars, added to the goal line of the system prompt), for example "enter the decoy code 000000 on a one-time code screen" |
+| `fresh_ip_visit` | `{region, reason}` | Stretch, high-risk mode only: robot visit from a throwaway Vultr VM in another region (12.1); `region` from a fixed list |
+| `conclude` | `{claims, action: "block" or "none", untested: [text]}` | Ends the investigation |
+
+Validation: tool name in the menu, args match the schema, unknown fields rejected. Invalid output: one repair retry, then the host forces `conclude`. Tool output never reaches a shell; the host maps each tool to a fixed `docker` argument list.
+
+Budget: at most `PD_INVESTIGATOR_MAX_SANDBOXES` (default 5) sandboxes per scan including round 1, and `PD_INVESTIGATOR_MAX_SECONDS` (default 240) wall clock. At either limit the host forces `conclude`.
+
+### 6A.3 Claims
+```json
+{
+  "claims": [
+    {"hypothesis": "H2", "signal": "S1",
+     "text": "I sent the decoy password and it went to cdn-metrics, which Vexalo does not own.",
+     "cite": ["victim/network.jsonl:14"]}
+  ],
+  "action": "block",
+  "untested": ["Visits from regions other than Sweden"]
+}
+```
+Each `cite` is `<visit>/<file>:<line>` or `<visit>/step-NN.png`. Section 8.4 says how claims are checked.
+
+### 6A.4 Mobile profile
+Same image and victim agent; env `PD_PROFILE=victim_mobile`. Before the first navigation the recorder sets, through CDP: `Emulation.setUserAgentOverride` (Chrome on Android user agent, `platform` Android), `Emulation.setDeviceMetricsOverride` (412x915, `deviceScaleFactor` 2.625, `mobile: true`), `Emulation.setTouchEmulationEnabled` (`maxTouchPoints` 5). Known limit: a desktop Chrome engine with a mobile user agent can be detected by deep fingerprinting.
+
+### 6A.5 Fallback
+If the planner fails two calls in a row, the host skips round 2 and builds claims directly from the rules (8.4). A scan always ends with a verdict. The UI shows "Planner unavailable, rules only".
 
 ## 7. Human Mimicry
 
@@ -243,9 +303,11 @@ Proof: the BotD page (9.4). Pass: robot profile `bot: true`, victim profile `bot
 scans/<scan_id>/
   robot/robot.json, robot/final.png
   victim/step-01.png ... step-NN.png
-  victim/network.jsonl, victim/navigations.jsonl, victim/probes.jsonl
+  victim/network.jsonl, victim/navigations.jsonl, victim/probes.jsonl, victim/blocked.jsonl
   victim/agent.jsonl            (each observation summary, action, reason)
-  verdict.json
+  <visit>/...                   (one folder per follow-up visit, same files, e.g. victim_mobile-3/)
+  investigator.jsonl            (plan, each tool call with reason, hypothesis updates, claims)
+    verdict.json
 ```
 After the scan, upload the folder to Object Storage (section 12) and store presigned URLs (7 days) in the scan record.
 
@@ -262,18 +324,22 @@ After the scan, upload the folder to Object Storage (section 12) and store presi
 | M4 | After submit, navigation to the real brand domain | `navigations.jsonl` |
 
 ### 8.3 Brand check
-One LLM call with page title, visible text (first 2,000 chars) and host. Output `{"brand": "Vexalo" | null, "confidence": 0..1}`. Code compares with `brands.json`:
+One call to the vision model (`PD_VISION_MODEL`) with the login-page screenshot, page title, visible text (first 2,000 chars) and host. If no vision model is configured, the same call without the screenshot goes to `PD_MODEL`. Output `{"brand": "Vexalo" | null, "confidence": 0..1}`. Code compares with `brands.json`:
 ```json
 { "Vexalo": ["vexalo.<VM-IP-dashed>.sslip.io"] }
 ```
 Add a few real brands with their owned login domains only, for credibility. Never build pages for them.
 
 ### 8.4 Verdict rules
-- Any of S1 to S4 → **Scam**.
-- Else two or more of M1 to M4 → **Suspicious**.
-- Else → **No evidence found**. Never output "safe".
+1. **Compute signals** S1 to S4 and M1 to M4 from the evidence files of all visits, with fixed code.
+2. **Check claims.** For each investigator claim: every `cite` must exist, and the cited line or file must support the claimed signal (an S1 claim must cite a `network.jsonl` line that contains the decoy in plain, URL-encoded or base64 form; an S2 claim must cite `robot.json` and an `agent.jsonl` line; and so on). A claim whose signal the code did not also compute, or whose citation does not support it, is rejected and emitted as `claim_rejected` with the reason.
+3. **Verdict from verified signals only:**
+   - Any of S1 to S4 → **Scam**.
+   - Else two or more of M1 to M4 → **Suspicious**.
+   - Else → **No evidence found**. Never output "safe".
+4. **Action.** On Scam with `action: "block"` from the investigator (or from the fallback), the scan's `decision` is set to `block` by the agent (`decided_by: "agent"`). The analyst can override with Release (`decided_by: "analyst"`).
 
-`verdict.json`: `{verdict, reasons: [{signal, text, evidence: [file or line refs]}], decoy: {email, password_masked}, robot_final_url, victim_login_host, password_sent_to: [hosts]}`.
+`verdict.json`: `{verdict, reasons: [{signal, text, evidence: [file or line refs]}], rejected_claims: [{claim, reason}], decoy: {email, password_masked}, robot_final_url, victim_login_host, password_sent_to: [hosts], blocked_requests: [{host, url}], hypotheses: [{id, text, status}], action_taken, untested: [text]}`.
 
 ## 9. Test Sites (Fixtures)
 
@@ -287,10 +353,14 @@ One small FastAPI app on port 8081, routed by Caddy using the `Host` header. Pla
 | `cdn-metrics.<IP-dashed>.sslip.io` | Collector. Accepts POST, returns 204, appends to `collector.log` |
 
 ### 9.1 Kit stages
-1. **Shared document page**: "Anna shared Q4-budget.pdf with you" and a "Review document" button.
+1. **Shared document page**: "Anna shared Q4-budget.pdf with you" and a "Review document" button. The bot check from stage 3 also runs here on load, as real kits do; without it the robot (which never clicks) stays on this page and A1 cannot pass.
 2. **Gate**: an "I am not a robot" checkbox (custom HTML, not a real CAPTCHA) and a Continue button.
 3. **Bot check** (JavaScript, before the login renders): if `navigator.webdriver === true` or the user agent contains `HeadlessChrome` or `navigator.hardwareConcurrency <= 2` or `navigator.plugins.length === 0`, redirect to `/news` (a harmless local page).
-4. **Login**: Vexalo-styled form. Submit sends `fetch POST` with JSON `{email, password}` to the collector host, then redirects to the legit Vexalo host.
+4. **Login**: Vexalo-styled form. Submit sends `fetch POST` with JSON `{email, password}` to the collector host, then redirects to the legit Vexalo host. A cross-origin JSON POST triggers a CORS preflight: the collector must answer `OPTIONS` with `Access-Control-Allow-Origin: *`, `Access-Control-Allow-Methods: POST` and `Access-Control-Allow-Headers: Content-Type`, otherwise the browser never sends the POST and S1 cannot fire.
+5. **Hostile script** (runs on the login page, the containment moment): `fetch` calls to `http://169.254.169.254/latest/meta-data/` (cloud metadata), `http://172.30.0.1:8000/api/health` (the host through the gateway) and `http://<VM IP>:443/` (the app). The network lock rejects all three; the recorder logs them to `blocked.jsonl`; the UI shows them as blocked.
+
+### 9.1a Mobile-only variant (`/m/` on the kit host)
+Same stages, but stage 1 shows "This document can only be opened on a phone" unless `navigator.maxTouchPoints > 0` and the user agent contains `Android` or `iPhone`. The desktop victim reaches nothing; the investigator should dispatch `victim_mobile`, which reaches the login. This is the demo proof that the plan adapts to evidence.
 
 ### 9.2 Legit site
 Same Vexalo look. Form posts to its own host. No gate, no bot check.
@@ -299,7 +369,8 @@ Same Vexalo look. Form posts to its own host. No gate, no bot check.
 | Input | Expected verdict | Signals |
 |---|---|---|
 | Legit link | No evidence found | none |
-| Kit link | Scam | S1, S2, S3; M1, M3, M4 |
+| Kit link | Scam | S1, S2, S3; M1, M3, M4; three blocked requests |
+| Mobile-only kit link | Scam | Investigator dispatches `victim_mobile`; H3 supported; S1 from the mobile visit |
 
 ### 9.4 BotD page
 `vexalo-docs.<IP>.nip.io/botd` loads BotD from its CDN (`https://openfpcdn.io/botd/v1`, VERIFY) and prints the `detect()` result as JSON in a `<pre id="result">`. Scoreboard job runs the robot profile and the victim profile against it.
@@ -309,19 +380,21 @@ Same Vexalo look. Form posts to its own host. No gate, no bot check.
 | Method | Path | Body or response |
 |---|---|---|
 | GET | `/` | UI |
-| POST | `/api/scans` | `{url, mode: "standard" | "high_risk"}` → `{scan_id}` |
+| POST | `/api/scans` | `{url, mode: "standard" | "high_risk"}` → `{scan_id, queued_position}`; 429 over the per-IP limit |
 | GET | `/api/scans/{id}` | Scan record with verdict and evidence links |
 | GET | `/api/scans/{id}/events` | SSE stream; replays stored events, then live |
 | POST | `/api/scans/{id}/decision` | `{decision: "block" | "release"}` |
 | POST | `/api/scoreboard` | Runs BotD for both profiles → `{robot, victim}` |
 | GET | `/api/health` | `{ok, model, runtime}` |
 
-Event types: `scan_started`, `sandbox_created`, `robot_done`, `agent_step`, `screenshot`, `request_seen`, `decoy_sent`, `probe_seen`, `sandbox_destroyed`, `verdict`, `evidence_uploaded`, `error`.
+Event types and payloads: `docs/EVENTS.md` (the contract between lanes).
+
+Public URL protection: at most `PD_MAX_SCANS` (default 2) scans run at once and at most `PD_MAX_SANDBOXES` (default 4) containers exist at once; further scans wait in a FIFO queue (`scan_queued` event with position). Per client IP: at most `PD_RATE_LIMIT_PER_IP` (default 5) scans per 10 minutes. Judges will use the public URL; it must not fall over.
 
 SQLite tables:
 | Table | Columns |
 |---|---|
-| `scans` | `id, url, mode, status, verdict, decoy_email, decoy_password, evidence_json, decision, created_at, finished_at` |
+| `scans` | `id, url, mode, status, verdict, decoy_email, decoy_password, evidence_json, decision, decided_by, client_ip, created_at, finished_at` |
 | `events` | `id, scan_id, ts, type, payload_json` |
 
 ## 11. Web UI
@@ -330,19 +403,21 @@ Single server-rendered page, vanilla JS, `EventSource` for SSE. No frontend fram
 
 | Area | Content |
 |---|---|
-| Top | URL input, mode toggle (standard / high-risk), Scan button, two preset buttons: "Legit Vexalo", "Phishing kit" |
+| Top | URL input, mode toggle (standard / high-risk), Scan button, three preset buttons: "Legit Vexalo", "Phishing kit", "Mobile-only kit" |
+| Investigation board | Hypotheses with live status; a dispatch timeline where each sandbox appears, runs and is destroyed, with the investigator's first-person reason for every dispatch |
 | Middle left | **Scanner saw**: robot screenshot, final URL |
 | Middle right | **Victim saw**: step screenshots as a strip, current step reason |
 | Below | Password trail: decoy email (shown), password (masked), list of hosts that received it, highlighted |
-| Right column | Verdict badge, reasons, each reason links to its evidence; Block and Release buttons |
+| Right column | Verdict badge, reasons, each reason links to its evidence; rejected claims shown struck through with the reason; "Blocked by agent" with an analyst Release override |
+| Containment panel | Blocked requests from the hostile page (metadata endpoint, host, app), each marked blocked |
 | Footer | Live counters: sandboxes created and destroyed, requests seen, bot probes; link to the scoreboard page |
 
 ## 12. Vultr Products
 
 | Product | Use | Notes |
 |---|---|---|
-| Cloud Compute VM, region Stockholm | Host for app, Docker, gVisor, fixtures | 4 vCPU / 8 GB recommended for two Chrome sandboxes in parallel |
-| Serverless Inference | All LLM calls | OpenAI-compatible |
+| Cloud Compute VM, region Stockholm | Host for app, Docker, gVisor, fixtures | 16 GB RAM recommended: up to 4 Chrome sandboxes at 2 GB each (`PD_MAX_SANDBOXES`) |
+| Serverless Inference | All LLM calls: investigator, victim agent, vision brand check | OpenAI-compatible |
 | Object Storage | Evidence bundles, presigned links | S3 API via `boto3`, endpoint from the Vultr console (VERIFY hostname) |
 | Firewall Group | Inbound 22 (team IPs), 80, 443 only | Attach to the main VM |
 | Vultr API | High-risk mode: throwaway VM per scan | `POST /v2/instances`, `DELETE /v2/instances/{id}`; region, plan and OS IDs from `GET /v2/regions`, `/v2/plans`, `/v2/os` |
@@ -363,9 +438,11 @@ Single server-rendered page, vanilla JS, `EventSource` for SSE. No frontend fram
 | Secret hygiene | No keys in containers; decoy identity only; model sees placeholders, never real secrets |
 | Resource limits | 2 GB memory, 2 CPUs, 512 PIDs, 120 s wall clock per visit |
 | Lifecycle | New container per visit; `docker rm -f` in `finally`; scan directory uploaded then deleted locally after 1 hour |
-| Network | Private, link-local, metadata and host addresses dropped by iptables; only fixture port allowed on the VM IP |
+| Network | Private, link-local, metadata and host addresses rejected by iptables (DOCKER-USER and INPUT, 5.7); only the fixture port allowed on the VM IP; blocked attempts logged and shown |
+| Agent autonomy | Investigator tools are a fixed menu with validated args; sandbox and time budget per scan; claims verified by code |
+| Public URL abuse | Concurrent scan and sandbox caps, FIFO queue, per-IP rate limit (section 10) |
 
-The video containment moment: the kit page tries to run its bot check and steal the password; the sandbox is destroyed; the host is untouched; the password was a decoy.
+The video containment moment: the kit page runs its bot check, tries to reach the cloud metadata endpoint and the host (all three blocked on screen), and steals the password, which was a decoy; the sandbox is destroyed; the host is untouched.
 
 ## 14. Configuration
 
@@ -379,6 +456,9 @@ The video containment moment: the kit page tries to run its bot check and steal 
 | `PD_RUNTIME` | `runsc` (`runc` for local dev) | Sandbox runtime |
 | `PD_PUBLIC_IP_DASHED` | `203-0-113-5` | Fixture host names |
 | `PD_MAX_STEPS` | `15` | Agent limit |
+| `PD_INVESTIGATOR_MAX_SANDBOXES` / `PD_INVESTIGATOR_MAX_SECONDS` | `5` / `240` | Investigator budget (6A.2) |
+| `PD_MAX_SCANS` / `PD_MAX_SANDBOXES` | `2` / `4` | Global caps (section 10) |
+| `PD_RATE_LIMIT_PER_IP` | `5` | Scans per client IP per 10 minutes |
 
 ## 15. Repository Layout
 
@@ -389,6 +469,7 @@ phish-detonator/
     orchestrator.py    scan lifecycle, parallel visits
     sandbox.py         docker run / exec / rm, limits
     agent.py           loop from section 6
+    investigator.py    plan, tool choice, claims (6A)
     llm.py             OpenAI client for Vultr
     verdict.py         rules from section 8
     storage.py         S3 upload, presigned URLs
@@ -406,21 +487,22 @@ phish-detonator/
     netlock.sh         section 5.7
     Caddyfile
     phishdet.service, fixtures.service
-  docs/architecture.png
+  docs/architecture.png, docs/EVENTS.md
+  tests/               unit and smoke tests (CI)
   README.md            Overview, Prerequisites, Installation Procedure, Verification, Troubleshooting, Limits
 ```
 
 ## 16. Build Plan and Acceptance Tests
 
-| Time | Lane A (sandbox, infra, evidence) | Lane B (agent, verdict, UI, fixtures) |
-|---|---|---|
-| 09:30 to 11:00 | VM, firewall, gVisor, image builds, netlock | Fixtures live; agent loop completes the kit with a Vultr model |
-| 11:00 gate | Agent finishes the kit; else switch to Skill Canary (section 20) | |
-| 11:00 to 13:00 | Parallel visits, recorder, `docker rm -f` lifecycle | Verdict rules, brand check |
-| 13:30 to 15:00 | Object Storage; public URL live by 15:00 | UI split screen, SSE |
-| 15:00 to 17:00 | High-risk mode (stretch) | Scoreboard, polish |
-| 17:00 | Feature freeze | |
-| 17:00 to 18:30 | README, diagram | Video |
+Three lanes (owners in CLAUDE.md section 6). Order within each lane; gates in CLAUDE.md section 9.
+
+| Step | Lane A: the box | Lane B: the brain | Lane C: the face |
+|---|---|---|---|
+| 1 | Interface stubs PR; VM, firewall, gVisor, netlock | Fixtures (all stages, mobile variant); model choice | UI against fake events from `docs/EVENTS.md` |
+| 2 | Sandbox image, robot visit, victim start, recorder | Victim agent completes the kit (first gate) | SSE replay, split screen, password trail |
+| 3 | Orchestrator round 1, lifecycle, profiles, `dispatch` | Verdict rules and claim checks, brand check | Investigation board, containment panel |
+| 4 | Deploy, Caddy, public URL, caps and rate limit | Investigator (6A) | Wire to real scans, scoreboard |
+| 5 | Object Storage; high-risk mode (stretch) | Prompt tuning until A2 and A11 pass 3 of 3 | Polish, README, diagram, video |
 
 Acceptance tests (all must pass before feature freeze):
 | Id | Test | Pass |
@@ -435,6 +517,10 @@ Acceptance tests (all must pass before feature freeze):
 | A8 | Network lock | From a sandbox, `curl http://169.254.169.254/` and `curl http://<VM IP>:8000` fail |
 | A9 | Scoreboard | Robot `bot: true`, victim `bot: false` |
 | A10 | Inference | `/api/health` shows the Vultr model ID; no other LLM endpoint in code (`grep`) |
+| A11 | Investigator adapts | Mobile-only kit: investigator dispatches `victim_mobile`, verdict Scam, H3 supported, 3 runs of 3 |
+| A12 | Containment on screen | Kit run: `blocked.jsonl` has the metadata, gateway and app attempts; UI shows them |
+| A13 | Claim check | Unit test: a claim citing a line without the decoy is rejected with `claim_rejected` |
+| A14 | Public URL caps | 5 scans started at once: at most 2 run, the rest queue; 6th scan from one IP in 10 minutes gets 429 |
 
 ## 17. Demo Script
 
@@ -442,10 +528,12 @@ Acceptance tests (all must pass before feature freeze):
 |---|---|---|
 | 0:00 | Start page | "An analyst needs 23 minutes per reported phishing email. Scanners often say clean, because the page hides from them." |
 | 0:20 | Preset "Legit Vexalo" | "First, a real login page." Verdict: No evidence found. |
-| 0:45 | Preset "Phishing kit" | Split screen: robot sees a news page; victim passes the gate and the bot check. |
-| 1:45 | Password trail | "The decoy password went here. Vexalo does not own this host." Verdict: Scam, reasons linked to evidence. |
-| 2:15 | Scoreboard | "BotD catches our robot and passes our victim browser. The sandbox is gone. High-risk mode uses a fresh Vultr VM and IP." |
-| 2:40 | Vultr slide | Six products and their jobs. "Isolation makes autonomous execution safe to ship." |
+| 0:45 | Preset "Phishing kit" | The investigator writes its plan. Split screen: robot sees a news page; victim passes the gate and the bot check. |
+| 1:20 | Containment panel | The page tries the cloud metadata endpoint and the host: three requests blocked. "The page attacked the sandbox. Nothing got out." |
+| 1:40 | Password trail | "The decoy password went here. Vexalo does not own this host." The agent concludes Scam, cites evidence, blocks the link. |
+| 2:00 | Preset "Mobile-only kit" | Desktop victim sees nothing. Investigator: "Desktop got nothing. I'll try as a phone." A new sandbox appears; the mobile visit reaches the login. |
+| 2:30 | Scoreboard | "BotD catches our robot and passes our victim browser. Every sandbox is gone." |
+| 2:45 | Vultr slide | Six products and their jobs. "Isolation makes autonomous execution shippable." |
 
 ## 18. Submission Checklist
 
@@ -455,7 +543,7 @@ Acceptance tests (all must pass before feature freeze):
 - Demo video with the containment moment.
 - Architecture screenshot.
 - "How did you use Vultr?": the six products from section 12 and their jobs.
-- Both team members added; event selected: Vultr Agent Runtime Hackathon.
+- All three team members added; event selected: Vultr Agent Runtime Hackathon.
 
 ## 19. Open Items to Verify
 
@@ -465,14 +553,15 @@ Acceptance tests (all must pass before feature freeze):
 | ~~agent-browser under gVisor (own browser)~~ | **Verified 26 Nov: PASS** (`runsc/ab`) | Not needed |
 | agent-browser `--cdp` attach to our headful Chrome | Manual attach test on the Vultr VM, first hour | `act.mjs` over Playwright CDP |
 | ~~Victim profile passes BotD~~ | **Verified 26 Nov: robot `bot: true`, victim `bot: false`** | Not needed |
-| agent-browser command names (`type`, `get url`) | `agent-browser --help` | Use `fill`; read URL via recorder |
 | Chrome for Testing path | `agent-browser install` output | Use Playwright's Chromium |
 | Vultr model IDs and JSON reliability | `/v1/models`, 10 test calls | Fallback model, repair retry |
 | Object Storage endpoint and bucket creation | Vultr console | Serve evidence from the VM disk |
 | sslip.io and nip.io resolve from the VM and sandboxes | `getent hosts` | Use `/etc/hosts` entries in the container via `--add-host` |
 | ~~BotD CDN URL~~ | **Verified 26 Nov:** `https://openfpcdn.io/botd/v1` loaded and returned results | Not needed |
 | Rule order in DOCKER-USER | `iptables -L DOCKER-USER -n --line-numbers` | Rebuild rules in the right order |
-| "Vexalo" is not a real company | Web search | Pick another invented name |
+| ~~"Vexalo" is not a real company~~ | **Checked 27 Nov:** no company of that exact name found | Not needed |
+| ~~agent-browser command names~~ | **Checked 27 Nov, v0.43.0:** `type`, `hover`, `get`, `--cdp`, `--pin-tab` exist | Not needed |
+| Mobile profile reaches the mobile-only kit | Run `victim_mobile` on `/m/` | Add `navigator.userAgentData` override via init script |
 
 ## 20. Fallback: Skill Canary
 
