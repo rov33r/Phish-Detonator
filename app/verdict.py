@@ -296,10 +296,12 @@ def analyze(visits: dict[str, Visit], decoy: dict, brands: dict) -> Analysis:
     # S4: brand shown on a host that brand does not own
     if an.brand and an.brand in brands["brands"] and an.login_host and not owned_by(
             an.login_host, an.brand, brands):
-        cite = next((f"{v.name}/brand.json" for v in victims if v.brand),
-                    next((f"{v.name}/agent.jsonl:{n}" for v in victims for n, a in v.login_steps()
-                          if a.get("brand_seen")), "brand"))
-        an.add("S4", cite, f"The login page shows {an.brand}, but {an.login_host} does not belong to {an.brand}.")
+        # the vision check (brand.json) and every login step that saw the brand both back S4,
+        # so a claim made before the vision check ran still verifies
+        cites = [f"{v.name}/brand.json" for v in victims if v.brand] + [
+            f"{v.name}/agent.jsonl:{n}" for v in victims for n, a in v.login_steps() if a.get("brand_seen")]
+        for cite in cites or ["brand"]:
+            an.add("S4", cite, f"The login page shows {an.brand}, but {an.login_host} does not belong to {an.brand}.")
 
     # M3: free hosting
     hosts = [an.login_host] + [host_of(a.get("url", "")) for v in victims for _, a in v.agent[:1]]
