@@ -5,6 +5,7 @@ import json
 import os
 import re
 import threading
+import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -333,6 +334,36 @@ async def health(request: Request):
             and bool(os.getenv("PD_PUBLIC_IP_DASHED")), "live_presets": live_presets()}
 
 
+RATE_WINDOW_S = 600
+_rate_lock = threading.Lock()
+_recent: dict[str, list[float]] = {}
+
+
+def client_ip(request: Request) -> str | None:
+    """The visitor's IP. Behind Caddy every request comes from 127.0.0.1, so then the address Caddy
+    saw (the last X-Forwarded-For entry) counts; a client cannot spoof it past the proxy."""
+    peer = request.client.host if request.client else None
+    forwarded = request.headers.get("x-forwarded-for", "")
+    if peer in ("127.0.0.1", "::1") and forwarded:
+        return forwarded.split(",")[-1].strip() or peer
+    return peer
+
+
+def over_rate_limit(ip: str | None) -> bool:
+    """Public URL abuse (SPEC 10, A14): PD_RATE_LIMIT_PER_IP live scans per IP per 10 minutes; 0 disables."""
+    limit = int(os.getenv("PD_RATE_LIMIT_PER_IP", "5"))
+    if not limit or not ip:
+        return False
+    now = time.monotonic()
+    with _rate_lock:
+        recent = [t for t in _recent.get(ip, []) if now - t < RATE_WINDOW_S]
+        if len(recent) >= limit:
+            _recent[ip] = recent
+            return True
+        _recent[ip] = recent + [now]
+        return False
+
+
 @app.post("/api/scans", status_code=202)
 async def start_scan(body: ScanInput, request: Request):
     state = request.app.state
@@ -347,9 +378,11 @@ async def start_scan(body: ScanInput, request: Request):
         active = orchestrator_enabled(url)
         if not active and body.mode != "standard":
             raise HTTPException(422, "Links outside the active-scan list use Standard mode.")
-        client_ip = request.client.host if request.client else None
+        ip = client_ip(request)
+        if over_rate_limit(ip):
+            raise HTTPException(429, "Too many scans from this address. Try again in a few minutes.")
         await asyncio.to_thread(db.update_scan, scan_id, url=url, mode=body.mode, status="queued",
-                                client_ip=client_ip, capture_only=not active)
+                                client_ip=ip, capture_only=not active)
         # Both paths run in sandboxes: a full investigation, or a robot-only capture without a decoy.
         target, args = (orchestrator.run_scan, (scan_id, url, body.mode)) if active else (orchestrator.run_capture, (scan_id, url))
         threading.Thread(target=target, args=args, daemon=True).start()
@@ -487,7 +520,17 @@ async def scan_events(scan_id: str, request: Request, after: int = 0):
 @app.post("/api/scans/{scan_id}/decision")
 async def decide(scan_id: str, body: DecisionInput, request: Request):
     scan = demo_scan(request, scan_id)
-    if scan is None or scan.capture_only:
+    if scan is None:  # a real scan: the analyst can override the agent's decision (SPEC 8.4 step 4)
+        record = await asyncio.to_thread(db.get_scan, scan_id)
+        if record is None or record.get("capture_only"):
+            raise HTTPException(404, "Editable scan not found")
+        if not record.get("verdict"):
+            raise HTTPException(409, "Wait for the verdict before making a decision")
+        payload = {"decision": body.decision, "decided_by": "analyst"}
+        await asyncio.to_thread(db.update_scan, scan_id, **payload)
+        await asyncio.to_thread(db.emit, scan_id, "decision", payload)
+        return payload
+    if scan.capture_only:
         raise HTTPException(404, "Editable scan not found")
     if scan.verdict is None:
         raise HTTPException(409, "Wait for the verdict before making a decision")
