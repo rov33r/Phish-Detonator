@@ -29,6 +29,14 @@
       <p class="intro">Paste a link to compare what the scanner and visitor see.</p>
     </section>
     <section class="conversation" aria-label="Investigation conversation">
+      <section class="surface email-triage" id="email-triage" aria-labelledby="email-triage-heading" hidden>
+        <div class="section-head"><h2 id="email-triage-heading">Email triage</h2></div>
+        <div class="section-body">
+          <p id="email-triage-summary" class="subtle"></p>
+          <ul class="clean rows" id="email-links" aria-label="Detected links"></ul>
+          <ul class="clean rows" id="email-flags" aria-label="Email indicators"></ul>
+        </div>
+      </section>
       <div id="conversation-history"></div>
       <div class="exchange" id="active-exchange" hidden>
         <div class="prompt-message"><span>You</span><p id="submitted-url"></p></div>
@@ -112,6 +120,8 @@
                     <span class="skeleton-line"></span><span class="skeleton-line"></span>
                   </div>
                   <p class="stamp" id="verdict">Awaiting evidence</p>
+                  <p id="credential-finding" class="subtle" hidden></p>
+                  <p id="legitimate-check" class="subtle" hidden>Legitimate login ruled out</p>
                   <p id="decision" class="subtle" role="status">The verdict appears after the scan.</p>
                   <ul class="clean rows" id="reasons" hidden></ul>
                   <ul class="clean rows" id="rejected" hidden aria-label="Rejected claims"></ul>
@@ -151,6 +161,7 @@
                   <div class="text-skeleton" id="plan-skeleton" aria-hidden="true" hidden>
                     <span class="skeleton-line"></span><span class="skeleton-line"></span>
                   </div>
+                  <p id="planner-fallback" class="subtle" role="status" hidden>Planner unavailable, rules only</p>
                   <p id="plan" class="subtle">The investigator’s plan and hypotheses will appear here.</p>
                   <ul class="clean rows" id="hypotheses" hidden></ul>
                 </div>
@@ -188,6 +199,15 @@
         <button type="button" data-url="https://vexalo-docs.example/m/" aria-pressed="false">Mobile-only kit</button>
         <button type="button" data-url="https://vexalo-docs.example/bomb" aria-pressed="false">Resource bomb</button>
       </div>
+    <details class="email-input">
+      <summary>Or paste an email</summary>
+      <form id="email-form">
+        <label for="email-text">Email text or HTML</label>
+        <textarea id="email-text" rows="5" maxlength="50000" required></textarea>
+        <button type="submit" id="email-preview-button">Preview email</button>
+        <p id="email-preview-status" class="subtle" role="status"></p>
+      </form>
+    </details>
   </div></div>
 </body>
 </html>
