@@ -160,3 +160,24 @@ def test_scans_over_the_cap_queue(world, monkeypatch):
     first.join(5)
     second.join(5)
     assert db.get_scan("q2")["status"] == "finished"
+
+
+def test_memory_kill_is_reported_as_resource_limit(world, monkeypatch, tmp_path):
+    from app import db, sandbox
+    events = []
+    monkeypatch.setattr(db, "emit", lambda scan_id, type, payload: events.append((type, payload)))
+    monkeypatch.setattr(sandbox, "out_dir", lambda s, v: tmp_path / s / v)
+    monkeypatch.setattr(sandbox, "exit_state", lambda c: {"running": False, "oom_killed": False, "exit_code": 137})
+    orchestrator._limit_kill("s1", "victim", "pd-s1-victim")
+    hit = next(p for t, p in events if t == "resource_limit_hit")
+    assert hit["kind"] == "memory" and hit["limit_mb"] == 2048
+    assert json.loads((tmp_path / "s1" / "victim" / "resource_limit.json").read_text())["exit_code"] == 137
+
+
+def test_normal_end_is_not_a_limit(world, monkeypatch, tmp_path):
+    from app import db, sandbox
+    events = []
+    monkeypatch.setattr(db, "emit", lambda scan_id, type, payload: events.append((type, payload)))
+    monkeypatch.setattr(sandbox, "exit_state", lambda c: {"running": True, "oom_killed": False, "exit_code": 0})
+    orchestrator._limit_kill("s1", "victim", "pd-s1-victim")
+    assert not events

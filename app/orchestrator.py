@@ -57,6 +57,20 @@ def _time_limit(scan_id: str, visit: str, container: str) -> None:
     sandbox.stop_visit(container)
 
 
+def _limit_kill(scan_id: str, visit: str, container: str) -> None:
+    """A sandbox that died on its own while in use was killed by its limits (the memory cap, exit 137):
+    record it as evidence (M5) and show it, instead of a silent broken visit."""
+    state = sandbox.exit_state(container)
+    if not state or state["running"] or not (state["oom_killed"] or state["exit_code"] == 137):
+        return
+    limit_mb = int(str(sandbox.LIMITS["memory"]).rstrip("g")) * 1024
+    out = sandbox.out_dir(scan_id, visit)
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "resource_limit.json").write_text(json.dumps({"kind": "memory", **state, "limit_mb": limit_mb}))
+    db.emit(scan_id, "resource_limit_hit", {"visit": visit, "kind": "memory",
+                                            "peak_mb": max(peak_mem_mb.get(container, 0), limit_mb), "limit_mb": limit_mb})
+
+
 def _run_visit(scan_id: str, visit: str, profile: str, work: Callable[[str], None]) -> None:
     """One sandbox: create, run `work(container)`, always destroy. Errors become events, not crashes."""
     with _slot("sandboxes", "PD_MAX_SANDBOXES", "4"):
@@ -77,6 +91,10 @@ def _run_visit(scan_id: str, visit: str, profile: str, work: Callable[[str], Non
             _error(scan_id, f"visit:{visit}", exc)
         finally:
             timer.cancel()
+            try:
+                _limit_kill(scan_id, visit, container)
+            except Exception as exc:  # detection must never keep a sandbox alive
+                _error(scan_id, f"limit_check:{visit}", exc)
             sandbox.stop_visit(container)
             db.emit(scan_id, "sandbox_destroyed", {
                 "visit": visit, "container": container, "lifetime_s": round(time.monotonic() - started, 1),

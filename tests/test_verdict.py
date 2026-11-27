@@ -272,3 +272,13 @@ def test_all_sandboxes_failed_is_inconclusive(tmp_path):
     (scan / "victim").mkdir()  # sandbox never started: no evidence files
     r = vd.decide("s", scan_dir=scan, run_brand_check=False)
     assert r["verdict"] == "Inconclusive" and r["action_taken"] == "none" and r["reasons"][0]["signal"] == "ERR"
+
+
+def test_bomb_killed_sandbox_is_suspicious(tmp_path):
+    scan = tmp_path / "s"
+    (scan / "victim").mkdir(parents=True)
+    (scan / "decoy.json").write_text(json.dumps(DECOY))
+    (scan / "victim" / "resource_limit.json").write_text(json.dumps({"kind": "memory", "exit_code": 137}))
+    r = vd.decide("s", scan_dir=scan, run_brand_check=False)
+    assert r["verdict"] == "Suspicious" and [x["signal"] for x in r["reasons"]] == ["M5"]
+    assert "memory" in r["reasons"][0]["text"]

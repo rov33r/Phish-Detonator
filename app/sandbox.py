@@ -126,6 +126,19 @@ def _drop_special_files(root: pathlib.Path) -> None:
                 path.unlink(missing_ok=True)
 
 
+def exit_state(container: str) -> dict | None:
+    """How a sandbox ended: {"running", "oom_killed", "exit_code"}, or None if Docker cannot say.
+    Under gVisor the memory cap kills the whole sandbox, which shows as exit code 137."""
+    try:
+        done = _docker(["inspect", "-f", "{{.State.Running}} {{.State.OOMKilled}} {{.State.ExitCode}}", container])
+    except (OSError, subprocess.SubprocessError):
+        return None
+    parts = done.stdout.split()
+    if done.returncode != 0 or len(parts) != 3:
+        return None
+    return {"running": parts[0] == "true", "oom_killed": parts[1] == "true", "exit_code": int(parts[2])}
+
+
 def stop_visit(container: str) -> None:
     """Destroy the sandbox. Never raises: it runs in finally blocks."""
     try:
