@@ -25,6 +25,15 @@ const probeScript = () => {
   }
 };
 
+// A CDP override on a new tab races the first navigation, so what a page checks at load is also set here.
+const deviceScript = (mobile) => {
+  const fix = (name, value) => Object.defineProperty(Navigator.prototype, name, { configurable: true, get: () => value });
+  fix('hardwareConcurrency', 8);
+  if (!mobile) return;
+  fix('maxTouchPoints', 5);
+  if (!('ontouchstart' in window)) window.ontouchstart = null;
+};
+
 const ANDROID_UA = (major) =>
   `Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${major}.0.0.0 Mobile Safari/537.36`;
 
@@ -71,6 +80,7 @@ context.on('requestfailed', (request) => log('blocked', {
 }));
 
 await context.addInitScript(probeScript);
+await context.addInitScript(deviceScript, PROFILE === 'victim_mobile');
 context.on('page', watch);
 await Promise.all(context.pages().map(watch));
 
