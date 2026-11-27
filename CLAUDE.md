@@ -4,7 +4,7 @@
 
 Hackathon build, 27 Nov 2026 (Vultr Agent Runtime Hackathon, Stockholm). Three developers, three lanes, one trunk (`main`). Deadline: see `docs/KICKOFF.md` section 1.
 
-Phish Detonator investigates a suspicious link. An investigator agent writes a plan with hypotheses, dispatches visits to fresh gVisor sandboxes (always a robot visit and a victim visit, then follow-ups it chooses, such as a mobile victim), tracks where a decoy password goes, and concludes with claims that code verifies against the evidence. On Scam the agent blocks the link itself; the analyst can override.
+Phish Detonator investigates a suspicious link. An investigator agent writes a plan with hypotheses, dispatches visits to fresh gVisor sandboxes (always a robot visit and a victim visit, then follow-ups it chooses, such as a mobile victim), tracks where a decoy password goes, and concludes with claims that code verifies against the evidence. On Phishing the agent blocks the link itself; the analyst can override.
 
 **Source of truth: `docs/SPEC.md`.** Read the sections named in the task before writing code. If the spec and this file disagree, this file wins.
 
@@ -76,7 +76,7 @@ Each lane owns its files. Touch the other lane's files only through the interfac
 
 Each lane owns the tests for its files (`tests/test_<module>.py`).
 
-Judging focus: a polished product where the workflow is visible on screen, and an agent that takes on a real task and owns its decisions. Lane C makes every step visible (plan and hypotheses, each sandbox dispatched and destroyed with the investigator's reason, each agent step with its screenshot, blocked attacks, evidence, verdict, rejected claims). Lane B makes the agent own the case (SPEC 6A): it plans, adapts the plan to evidence, picks follow-up visits, and blocks on Scam with cited evidence; code verifies every claim (SPEC 8.4).
+Judging focus: a polished product where the workflow is visible on screen, and an agent that takes on a real task and owns its decisions. Lane C makes every step visible (plan and hypotheses, each sandbox dispatched and destroyed with the investigator's reason, each agent step with its screenshot, blocked attacks, evidence, verdict, rejected claims). Lane B makes the agent own the case (SPEC 6A): it plans, adapts the plan to evidence, picks follow-up visits, and blocks on Phishing with cited evidence; code verifies every claim (SPEC 8.4).
 
 Showcase features (SPEC 11A), above the requirements: live screen of the victim browser (A + C), replay and recorded demo runs (C), signed evidence report (C), resource bomb containment moment (B fixture, A detection), real sandbox and host numbers on screen (A + C). Email paste is a stretch.
 
