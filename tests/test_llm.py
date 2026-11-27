@@ -112,9 +112,16 @@ def test_server_errors_back_off_then_fallback(fake):
     assert [call["model"] for call in c.calls] == ["main-model"] * 3 + ["backup-model"]
 
 
-def test_timeout_is_retried(fake):
+def test_timeout_switches_to_fallback_without_waiting(fake):
     c = fake(openai.APITimeoutError(request=REQ), '{"action": "click"}')
-    assert llm.chat_json([{"role": "user", "content": "x"}], SCHEMA, name="a").data["action"] == "click"
+    reply = llm.chat_json([{"role": "user", "content": "x"}], SCHEMA, name="a")
+    assert reply.model == "backup-model" and c.sleeps == []
+    assert c.calls[0]["timeout"] == llm.TIMEOUT_S
+
+
+def test_connection_error_is_retried(fake):
+    c = fake(openai.APIConnectionError(request=REQ), '{"action": "click"}')
+    assert llm.chat_json([{"role": "user", "content": "x"}], SCHEMA, name="a").model == "main-model"
     assert c.sleeps == [1.0]
 
 

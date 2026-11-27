@@ -195,7 +195,7 @@ def run_victim(scan_id: str, url: str, container: str, decoy: dict, goal: str | 
         """Screenshots can fail mid-navigation; one retry, then go on without it."""
         for _ in range(2):
             try:
-                browser("screenshot", f"/out/step-{n:02d}.png")
+                browser("screenshot", f"/out/step-{n:02d}.png", timeout=10)
                 _emit(scan_id, "screenshot", {"visit": visit, "step": n, "path": f"{visit}/step-{n:02d}.png"})
                 return
             except RuntimeError:
@@ -269,7 +269,7 @@ def run_victim(scan_id: str, url: str, container: str, decoy: dict, goal: str | 
             if a["action"] == "click":
                 browser("hover", a["ref"])
                 try:
-                    browser("click", a["ref"], timeout=15)
+                    browser("click", a["ref"], timeout=10)
                 except RuntimeError:  # a submit that navigates away can hang the click; the next snapshot tells
                     _sleep(1)
             elif a["action"] == "fill":
@@ -277,7 +277,7 @@ def run_victim(scan_id: str, url: str, container: str, decoy: dict, goal: str | 
                 typed.append(a["text"])
             elif a["action"] == "press":
                 try:
-                    browser("press", a["key"], timeout=15)
+                    browser("press", a["key"], timeout=10)
                 except RuntimeError:
                     _sleep(1)
             elif a["action"] == "scroll":
