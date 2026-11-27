@@ -188,3 +188,53 @@ def test_persisted_stream_receives_live_event_and_unsubscribes(monkeypatch):
 
     asyncio.run(verify())
     assert not listeners
+
+
+@pytest.mark.parametrize("http_status", [200, 403])
+def test_public_link_has_its_own_screenshot(client, monkeypatch, http_status):
+    from app import passive_capture
+
+    target = "https://public.example/story"
+    png = b"\x89PNG\r\n\x1a\n synthetic capture"
+
+    def capture(url):
+        assert url == target
+        return url, "Actual page title", png, http_status
+
+    monkeypatch.setattr(passive_capture, "capture_url", capture)
+    response = client.post("/api/scans", json={"url": target})
+    assert response.status_code == 202
+    assert response.json()["capture_only"] is True
+    path = f"/api/scans/{response.json()['scan_id']}"
+    events = read_events(client.get(f"{path}/events"))
+    assert [event["type"] for event in events] == ["scan_started", "robot_done"]
+    assert events[1]["payload"]["title"] == "Actual page title"
+    assert client.get(path).json()["verdict"] is None
+    assert client.get(path).json()["http_status"] == http_status
+    assert client.get(f"{path}/files/robot/final.png").content == png
+    assert client.post(f"{path}/decision", json={"decision": "block"}).status_code == 404
+
+
+def test_private_link_is_not_fetched(client):
+    response = client.post("/api/scans", json={"url": "http://127.0.0.1/"})
+    assert response.json()["capture_only"] is True
+    path = f"/api/scans/{response.json()['scan_id']}"
+    events = read_events(client.get(f"{path}/events"))
+    assert events[-1]["type"] == "error"
+    assert "publicly reachable" in events[-1]["payload"]["message"]
+    assert client.get(f"{path}/files/robot/final.png").status_code == 404
+
+
+def test_capture_reports_access_gate_without_echoing_query(client, monkeypatch):
+    from app import passive_capture
+
+    result = "https://team.cloudflareaccess.com/cdn-cgi/access/login/public.example"
+    monkeypatch.setattr(passive_capture, "capture_url", lambda _: (
+        result + "?meta=redact-this#fragment", "Sign in", b"image", 200,
+    ))
+    response = client.post("/api/scans", json={"url": "https://public.example/"})
+    path = f"/api/scans/{response.json()['scan_id']}"
+    events = read_events(client.get(f"{path}/events"))
+    assert events[-1]["payload"]["final_url"] == result
+    assert "redact-this" not in str(events)
+    assert client.get(path).json()["access_gate"] == "cloudflare"

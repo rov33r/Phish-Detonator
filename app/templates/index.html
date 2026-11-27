@@ -26,11 +26,15 @@
     <section class="welcome" id="welcome" aria-labelledby="page-title">
       <span class="welcome-mark" aria-hidden="true"><span></span><span></span></span>
       <h1 id="page-title">What link should we investigate?</h1>
-      <p class="intro">Paste a link to compare what the scanner and visitor see.</p>
+      <p class="intro">Paste a public link to capture its page, or replay a full investigation.</p>
     </section>
     <details id="scoreboard" class="disclosure">
       <summary>Saved browser scoreboard</summary>
+      <div class="section-body">
+        <p class="subtle">Compare the scanner and victim browser against the project’s BotD fixture.</p>
+        <button type="button" id="scoreboard-run" class="primary" hidden>Run browser check</button>
       <p id="scoreboard-result" class="subtle" role="status"></p>
+      </div>
     </details>
     <section class="conversation" aria-label="Investigation conversation">
       <section class="surface email-triage" id="email-triage" aria-labelledby="email-triage-heading" hidden>
@@ -69,7 +73,7 @@
               <div class="compare-stage" id="compare-stage" data-view="pair">
                 <figure class="compare-picture compare-picture--scanner">
                   <figcaption>
-                    <span class="browser-id"><span class="browser-symbol browser-symbol--scanner" aria-hidden="true"></span><span><strong>Scanner bot</strong><small>Headless browser</small></span></span>
+                    <span class="browser-id"><span class="browser-symbol browser-symbol--scanner" aria-hidden="true"></span><span><strong id="scanner-label">Scanner bot</strong><small id="scanner-profile">Headless browser</small></span></span>
                     <span class="browser-state" id="scanner-state" data-state="waiting">Queued</span>
                   </figcaption>
                   <div class="capture-placeholder" id="pending-robot" hidden>
@@ -98,7 +102,7 @@
               </div>
               <div class="panes">
                 <section class="pane" aria-labelledby="scanner-heading">
-                  <div class="pane-heading"><h3 id="scanner-heading">Scanner saw</h3><span class="subtle">Headless</span></div>
+                  <div class="pane-heading"><h3 id="scanner-heading">Scanner saw</h3><span class="subtle" id="scanner-pane-profile">Headless</span></div>
                   <p class="caption mono" id="robot-url">Final URL will appear here.</p>
                 </section>
                 <section class="pane" aria-labelledby="victim-heading">
@@ -196,7 +200,7 @@
         </label>
         <button class="primary" id="scan-button">Start scan</button>
       </form>
-      <div class="presets" aria-label="Simulation presets">
+      <div class="presets" id="simulated-presets" aria-label="Simulation presets">
         <span>Try a preset</span>
         <button type="button" data-url="https://vexalo.example/login" aria-pressed="false">Legit Vexalo</button>
         <button type="button" data-url="https://vexalo-docs.example/share" aria-pressed="false">Phishing kit</button>

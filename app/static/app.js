@@ -36,6 +36,7 @@ let lastEvent = 0;
 let startTime;
 let activeResult;
 let playback = false;
+let captureOnly = false;
 
 function status(text, state) {
   byId("status").textContent = text;
@@ -276,6 +277,10 @@ function renderEmailTriage({ links, flags }) {
 const render = {
   scan_started(event, p) {
     if (playback && p.url) byId("submitted-url").textContent = p.url;
+    if (captureOnly) {
+      status("Capturing public page", "running");
+      return;
+    }
     byId("email").textContent = p.decoy_email;
     byId("password").textContent = "••••••••••••••••";
     activity(event, "Scan started", p.url);
@@ -326,10 +331,35 @@ const render = {
     activity(event, `Sandbox created · ${p.visit}`, `${p.runtime} · ${p.limits.memory} MB memory cap`);
   },
   robot_done(event, p) {
-    setVisitState(p.visit ?? "robot", "Captured", "running");
-    capture("robot", p.screenshot, `Scanner capture showing ${p.title}`);
+    setVisitState(p.visit ?? "robot", "Captured", captureOnly ? "finished" : "running");
+    capture("robot", p.screenshot, `${captureOnly ? "Public-page screenshot" : "Scanner capture"} showing ${p.title}`);
     byId("robot-url").textContent = p.final_url;
     activity(event, "Scanner capture received", p.title);
+    if (captureOnly) {
+      byId("verdict").textContent = "Screenshot captured";
+      byId("decision").textContent = "Captured the public HTML with scripts and external assets disabled. No phishing verdict was made.";
+      activeResult = "Screenshot captured";
+      stop("Capture complete", "complete");
+      const currentId = scanId;
+      fetch(`/api/scans/${currentId}`)
+        .then((response) => response.ok ? response.json() : null)
+        .then((record) => {
+          if (currentId !== scanId || !record) return;
+          if (record.access_gate === "cloudflare") {
+            byId("verdict").textContent = "Sign-in required";
+            activeResult = "Sign-in required";
+            byId("decision").textContent = "The public link redirected to Cloudflare Access. This screenshot shows the sign-in page. The page behind it was not inspected.";
+            return;
+          }
+          if (!(record.http_status >= 400)) return;
+          const status = record.http_status;
+          const label = status === 403 ? "Access denied" : `Site returned HTTP ${status}`;
+          byId("verdict").textContent = label;
+          activeResult = label;
+          byId("decision").textContent = `The site returned HTTP ${status}. The screenshot shows the server’s response. No phishing verdict was made.`;
+        })
+        .catch(() => {});
+    }
   },
   agent_step(event, p) {
     setVisitState(p.visit, `Step ${p.step}`, "running");
@@ -446,6 +476,12 @@ const render = {
   },
   decision(event, p) { recordDecision(p); },
   error(event, p) {
+    if (captureOnly && p.where === "capture") {
+      byId("verdict").textContent = "Screenshot unavailable";
+      byId("decision").textContent = "The page could not be captured. No phishing verdict was made.";
+      stop(p.message, "error");
+      return;
+    }
     if (p.where === "investigator" && p.message.includes("Planner unavailable, rules only")) {
       byId("planner-fallback").hidden = false;
       activity(event, "Planner unavailable, rules only");
@@ -513,9 +549,22 @@ for (const button of presets) {
 }
 urlInput.addEventListener("input", selectPreset);
 
-function openExchange(submitted, recording = false) {
+function configureCaptureView(enabled) {
+  captureOnly = enabled;
+  byId("active-exchange").dataset.captureOnly = String(enabled);
+  byId("environment").textContent = enabled ? "Passive capture" : playback ? "Recorded investigation" : "Simulation workspace";
+  byId("comparison-heading").textContent = enabled ? "Public-page screenshot" : "Browser comparison";
+  byId("scanner-label").textContent = enabled ? "Public page" : "Scanner bot";
+  byId("scanner-profile").textContent = enabled ? "Passive capture" : "Headless browser";
+  byId("scanner-heading").textContent = enabled ? "Final URL" : "Scanner saw";
+  byId("scanner-pane-profile").hidden = enabled;
+  if (enabled) byId("compare-stage").dataset.view = "scanner";
+}
+
+function openExchange(submitted, recording = false, capture = false) {
   reset();
   playback = recording;
+  configureCaptureView(capture);
   byId("welcome").hidden = true;
   byId("active-exchange").hidden = false;
   byId("submitted-url").textContent = submitted;
@@ -554,9 +603,10 @@ function connectScan(id) {
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
   if (startButton.disabled) return;
-  openExchange(urlInput.value);
+  openExchange(urlInput.value, false, !presets.some((button) => button.dataset.url === urlInput.value));
   try {
     const result = await post("/api/scans", Object.fromEntries(new FormData(form)));
+    configureCaptureView(result.capture_only === true);
     connectScan(result.scan_id);
   } catch (error) {
     stop(error.message, "error");
@@ -596,7 +646,7 @@ document.addEventListener("click", async (event) => {
 
 fetch("/api/health")
   .then((response) => response.json())
-  .then(({ demo, recordings }) => {
+  .then(({ demo, recordings, scoreboard_enabled }) => {
     const group = byId("recorded-runs");
     const names = { kit: "Phishing kit", mobile: "Mobile-only kit", legit: "Legit Vexalo", inject: "Prompt injection" };
     for (const [key, id] of Object.entries(recordings ?? {})) {
@@ -605,7 +655,9 @@ fetch("/api/health")
       group.append(link);
     }
     group.hidden = !group.querySelector("a");
-    if (!demo && !scanId) byId("environment").textContent = "Recorded investigations";
+    byId("scoreboard-run").hidden = !scoreboard_enabled;
+    if (!demo && !scanId) byId("environment").textContent = "Public link capture";
+    byId("simulated-presets").hidden = !demo;
   })
   .catch(() => status("Could not check service status", "error"));
 
@@ -623,6 +675,27 @@ byId("scoreboard").addEventListener("toggle", async (event) => {
       : "No saved scoreboard result.";
   } catch {
     summary.textContent = "Could not load the saved scoreboard.";
+  }
+});
+
+byId("scoreboard-run").addEventListener("click", async (event) => {
+  const button = event.currentTarget;
+  const summary = byId("scoreboard-result");
+  button.disabled = true;
+  summary.textContent = "Running scanner and victim browsers against the BotD fixture…";
+  try {
+    const response = await fetch("/api/scoreboard", { method: "POST" });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.detail ?? "The browser check could not start.");
+    }
+    const result = await response.json();
+    const bot = (profile) => profile?.bot === true ? "true" : profile?.bot === false ? "false" : "unavailable";
+    summary.textContent = `Scanner bot: ${bot(result.robot)} · Victim bot: ${bot(result.victim)}${result.pass ? " · Check passed" : " · Check did not pass"}`;
+  } catch (error) {
+    summary.textContent = error.message;
+  } finally {
+    button.disabled = false;
   }
 });
 
