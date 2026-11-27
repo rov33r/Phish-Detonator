@@ -185,3 +185,12 @@ def test_browser_error_ends_visit(rig, monkeypatch):
     monkeypatch.setattr(agent, "_exec", lambda c, a, t=30: (1, "cannot attach to CDP"))
     summary = agent.run_victim("s1", KIT + "/", "pd-s1-victim", DECOY)
     assert summary["stop_reason"] == "browser_error"
+
+
+def test_make_decoy_is_unique_and_well_formed():
+    import re
+    a, b = agent.make_decoy(), agent.make_decoy()
+    assert a != b
+    assert re.fullmatch(r"[a-z]+\.[a-z]+\.[0-9a-f]{6}@[a-z]+-mail\.com", a["email"])
+    pw = a["password"]
+    assert len(pw) == 16 and sum(c in "!#%*" for c in pw) == 1
