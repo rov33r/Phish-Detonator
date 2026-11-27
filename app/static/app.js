@@ -24,13 +24,20 @@ const startButton = byId("scan-button");
 const presets = [...document.querySelectorAll("[data-url]")];
 const workspace = document.querySelector(".workspace");
 const initialWorkspace = workspace.cloneNode(true);
-const counterIds = ["created", "destroyed", "requests", "blocked-count", "limits", "probes"];
+const counterIds = ["created", "destroyed", "blocked-count", "limits", "probes"];
 const hypothesisRows = new Map();
+const blockedRows = new Map();
+const roundCards = new Map();
+const visitedStages = new Set();
+const hypothesisChips = {
+  open: "Checking", supported: "Confirmed", refuted: "Ruled out", untested: "Not tested",
+};
 const sandboxRows = new Map();
 const stepReasons = new Map();
 const observedHosts = new Map();
 const thirdPartyHosts = new Set();
-const approvalCards = new Map();
+const latestShots = new Map();
+const autoAnswered = new Set();
 const approvalOutcomes = {
   auto_approved: "Auto-approved by the code policy",
   denied: "Denied by the code policy",
@@ -45,6 +52,10 @@ let startTime;
 let activeResult;
 let playback = false;
 let captureOnly = false;
+let liveService = false;
+let limitHit = false;
+let approveRest = false;
+let pendingApproval;
 
 function status(text, state) {
   byId("status").textContent = text;
@@ -90,13 +101,31 @@ function citeLinks(cites) {
 const captureVisits = ["robot", "victim"];
 const stages = [...document.querySelectorAll("[data-phase]")];
 
+function stageNote(phase, text) {
+  const stage = stages.find((item) => item.dataset.phase === phase);
+  if (stage) stage.querySelector(".stage-note").textContent = text;
+}
+
+// Stages can repeat (a follow-up after an approval), so completion tracks visits, not position.
 function setPhase(phase) {
-  const current = stages.findIndex((stage) => stage.dataset.phase === phase);
+  const current = stages.find((stage) => stage.dataset.phase === phase);
+  const previous = stages.find((stage) => stage.hasAttribute("aria-current"));
+  if (current) visitedStages.add(phase);
+  const end = phase === "complete" || phase === "verdict";
+  const reached = current ? stages.indexOf(current) : end ? stages.length : -1;
   stages.forEach((stage, index) => {
-    stage.dataset.complete = String(phase === "complete" || (current >= 0 && index < current));
-    if (index === current) stage.setAttribute("aria-current", "step");
+    const visited = visitedStages.has(stage.dataset.phase);
+    stage.dataset.complete = String(visited && stage !== current);
+    stage.dataset.skipped = String(!visited && index < reached);
+    if (stage === current) stage.setAttribute("aria-current", "step");
     else stage.removeAttribute("aria-current");
   });
+  if (!current || current === previous) return;
+  const target = byId(current.dataset.target);
+  if (target && !target.hidden) {
+    const smooth = !matchMedia("(prefers-reduced-motion: reduce)").matches;
+    target.scrollIntoView({ block: "start", behavior: smooth ? "smooth" : "auto" });
+  }
 }
 
 function showCapturePlaceholder(visit, message, loading) {
@@ -195,6 +224,7 @@ function activity(event, title, detail = "") {
   byId("timeline-empty").hidden = true;
   const row = appendRow("timeline", time, element("strong", title));
   if (detail) row.append(element("p", detail, "subtle"));
+  return row;
 }
 
 function recordDecision({ decision, decided_by }) {
@@ -203,6 +233,76 @@ function recordDecision({ decision, decided_by }) {
   for (const button of byId("decisions").querySelectorAll("button")) {
     button.setAttribute("aria-pressed", String(button.dataset.decision === decision));
   }
+  refreshBlocklist();
+}
+
+function clock(iso) {
+  const date = new Date(iso);
+  return Number.isNaN(date.getTime()) ? "" : date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
+}
+
+function scanLink(id, text) {
+  const link = element("a", text);
+  link.href = `/replay/${encodeURIComponent(id)}`;
+  return link;
+}
+
+function unblockButton(entry) {
+  const button = element("button", "Unblock", "unblock");
+  button.type = "button";
+  button.addEventListener("click", async () => {
+    button.disabled = true;
+    try {
+      // Unblocking is the analyst's Release on the scan that made the decision.
+      const result = await post(`/api/scans/${encodeURIComponent(entry.scan_id)}/decision`, { decision: "release" });
+      if (entry.scan_id === scanId) recordDecision(result); else refreshBlocklist();
+      if (byId("blocklist-hit").dataset.scan === entry.scan_id) {
+        byId("blocklist-hit").replaceChildren("Unblocked. Start the scan again to investigate the link.");
+        byId("blocklist-hit").dataset.status = "released";
+      }
+    } catch (error) {
+      button.disabled = false;
+      button.textContent = "Retry unblock";
+      button.title = error.message;
+    }
+  });
+  return button;
+}
+
+function showBlocklistHit(p, refused) {
+  const banner = byId("blocklist-hit");
+  const who = p.decided_by === "agent" ? "the agent" : "the analyst";
+  const at = clock(p.decided_at);
+  const lead = p.status === "blocked" ? (refused ? "⛔ Blocked" : "⛔ Already blocked") : "Released earlier";
+  const head = [`${lead} by ${who}${at ? ` at ${at}` : ""}`, p.verdict].filter(Boolean).join(" · ");
+  banner.replaceChildren(`${head} · `, scanLink(p.scan_id, "view previous scan"));
+  if (refused) banner.append(" · not opened again ", unblockButton(p));
+  else banner.append(" · investigating again");
+  banner.dataset.status = p.status;
+  banner.dataset.scan = p.scan_id;
+  banner.hidden = false;
+}
+
+// Blocked links are rendered as text, never as links to the suspicious page.
+function refreshBlocklist() {
+  fetch("/api/blocklist")
+    .then((response) => response.ok ? response.json() : Promise.reject(new Error("unavailable")))
+    .then(({ entries }) => {
+      const blocked = (entries ?? []).filter((entry) => entry.status === "blocked");
+      byId("blocklist").replaceChildren();
+      for (const entry of blocked) {
+        const who = entry.decided_by === "agent" ? "agent" : "analyst";
+        const detail = [`Blocked by ${who}`, entry.verdict, clock(entry.decided_at)].filter(Boolean).join(" · ");
+        const meta = element("p", `${detail} · `, "subtle");
+        meta.append(scanLink(entry.scan_id, "view scan"));
+        appendRow("blocklist", element("code", entry.url), meta, unblockButton(entry));
+      }
+      byId("blocklist-count").textContent = `(${blocked.length})`;
+      byId("blocklist-empty").hidden = blocked.length > 0;
+      byId("blocklist").hidden = blocked.length === 0;
+      byId("blocklist-panel").hidden = false;
+    })
+    .catch(() => { byId("blocklist-panel").hidden = true; });
 }
 
 function sandboxRow(visit) {
@@ -273,7 +373,9 @@ function renderEmailTriage({ links, flags }) {
     ? `${links.length} ${links.length === 1 ? "link" : "links"} found`
     : "No web links found.";
   for (const link of links) {
-    const row = appendRow("email-links", element("strong", link.url));
+    const title = element("strong", link.url);
+    if (link.blocklist?.status === "blocked") title.append(element("span", "Blocked", "blocked-tag"));
+    const row = appendRow("email-links", title);
     if (link.shown_text && link.shown_text !== link.url) row.append(element("p", link.shown_text, "subtle"));
     if (link.picked) row.append(element("p", link.reason || "Selected for investigation", "subtle"));
   }
@@ -300,16 +402,18 @@ const render = {
   },
   plan(event, p) {
     setTextLoading("plan", false);
-    setPhase("captures");
     byId("plan").textContent = p.text;
     for (const item of p.hypotheses) {
       const title = element("div", "", "row-title");
-      const state = element("span", "Open", "subtle");
+      const state = element("span", "", "chip");
       const detail = element("p", "", "subtle");
-      title.append(element("strong", `${item.id} · ${item.text}`), state);
+      title.append(element("strong", item.text), state);
       const row = appendRow("hypotheses", title, detail);
       hypothesisRows.set(item.id, { row, state, detail });
+      setHypothesisChip(item.id, "open");
     }
+    stageNote("plan", `${p.hypotheses.length} ${p.hypotheses.length === 1 ? "question" : "questions"}`);
+    setPhase("captures");
   },
   hypothesis_update(event, p) {
     if (p.id === "H1" && p.status === "supported") {
@@ -317,7 +421,7 @@ const render = {
     }
     const entry = hypothesisRows.get(p.id);
     if (!entry) return;
-    entry.state.textContent = p.status[0].toUpperCase() + p.status.slice(1);
+    setHypothesisChip(p.id, p.status);
     entry.detail.textContent = p.reason;
     entry.row.querySelectorAll("a").forEach((link) => link.remove());
     entry.row.append(...citeLinks(p.evidence));
@@ -331,6 +435,13 @@ const render = {
     setVisitState(p.visit, "Dispatched", "running");
     const round = p.round ? `Round ${p.round} · ` : "";
     activity(event, `${round}Dispatch ${p.visit}`, p.reason);
+    roundCard(p);
+    if (p.round > 1) {
+      stageNote("followups", `Round ${p.round} · ${browserLabel(p.visit).toLowerCase()}`);
+      setPhase("followups");
+    } else {
+      stageNote("captures", "Scanner and desktop browser");
+    }
   },
   sandbox_created(event, p) {
     setPhase("captures");
@@ -376,75 +487,35 @@ const render = {
     activity(event, `${p.visit} · Step ${p.step} · ${p.action}`, `${p.reason} · ${p.model}`);
   },
   approval_requested(event, p) {
-    closeApproval(p.visit);
     byId("approval-stage").hidden = false;
-    const card = element("article", "", "approval-card");
-    const title = element("p", "", "approval-title");
-    title.append("The agent wants to submit the decoy login on ", element("strong", p.host || "this page"));
-    const note = element(
-      "p",
-      `${browserLabel(p.visit)} · Step ${p.step} · Only this scan's decoy ${(p.fields ?? []).join(" and ")} can be typed. Where the password really goes appears in the password trail.`,
-      "subtle",
-    );
-    const countdown = element("p", "", "approval-countdown");
-    const buttons = element("div", "", "decisions");
-    const approve = element("button", "Approve", "primary");
-    const deny = element("button", "Deny");
-    approve.type = deny.type = "button";
-    buttons.append(approve, deny);
-    const result = element("p", "", "subtle");
-    result.setAttribute("role", "status");
-    card.append(title, note, countdown, buttons, result);
-    byId("approvals").append(card);
-    const entry = { card, timer: undefined };
-    approvalCards.set(p.visit, entry);
-    const deadline = Date.now() + (Number(p.timeout_s) || 30) * 1000;
-    const tick = () => {
-      const left = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
-      countdown.textContent = left ? `${left} s to answer` : "No answer; the code policy decides";
-      if (!left) {
-        clearInterval(entry.timer);
-        approve.disabled = deny.disabled = true;
-      }
-    };
-    tick();
-    entry.timer = setInterval(tick, 250);
-    if (playback) {
-      approve.disabled = deny.disabled = true;
-      result.textContent = "Recorded run: the answer was given at the time.";
+    stageNote("approval", `Waiting · ${p.host}`);
+    setPhase("approval");
+    if (approveRest && !playback) {
+      autoAnswered.add(p.visit);
+      stageNote("approval", "Auto-approved by you");
+      answerApproval(p.visit, "approve");
+    } else {
+      openApprovalBanner(p);
     }
-    const answer = async (decision) => {
-      approve.disabled = deny.disabled = true;
-      result.textContent = "Sending…";
-      try {
-        const response = await fetch(`/api/scans/${scanId}/approve`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ visit: p.visit, decision }),
-        });
-        result.textContent = response.ok
-          ? `${decision === "approve" ? "Approval" : "Denial"} sent. Waiting for the agent.`
-          : "This visit is no longer waiting.";
-      } catch {
-        result.textContent = "Could not reach the server. The code policy decides on timeout.";
-      }
-    };
-    approve.addEventListener("click", () => answer("approve"));
-    deny.addEventListener("click", () => answer("deny"));
-    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    card.scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "center" });
     activity(event, `${p.visit} · Step ${p.step} · Approval requested`, `Submit on ${p.host || "this page"}`);
   },
   approval(event, p) {
     closeApproval(p.visit);
-    const outcome = approvalOutcomes[p.decision] ?? p.decision;
+    const outcome = autoAnswered.has(p.visit) && p.decision === "approved_by_analyst"
+      ? "Auto-approved by you" : approvalOutcomes[p.decision] ?? p.decision;
     byId("approval-stage").hidden = false;
     appendRow("approval-outcomes", element("strong", `${browserLabel(p.visit)} · ${outcome}`), element("span", p.reason ?? "", "subtle"));
     const denied = p.decision === "denied" || p.decision === "denied_by_analyst";
     setVisitState(p.visit, denied ? "Submit denied" : "Submit approved", "running");
+    stageNote("approval", outcome);
+    // An auto-approval has no request, so record the stage as passed without moving focus to it.
+    visitedStages.add("approval");
+    setPhase(stages.find((stage) => stage.hasAttribute("aria-current"))?.dataset.phase ?? "approval");
     activity(event, `${p.visit} · Step ${p.step} · ${outcome}`, p.reason);
   },
   screenshot(event, p) {
+    latestShots.set(p.visit, p.path);
+    if (pendingApproval === p.visit) showApprovalShot(p.visit);
     const frames = byId("frames");
     const label = `${p.visit} · Step ${p.step}`;
     const caption = stepReasons.get(`${p.visit}:${p.step}`) ?? "Screenshot received.";
@@ -461,7 +532,6 @@ const render = {
     frames.hidden = false;
     show();
   },
-  request_seen() { increment("requests"); },
   probe_seen() { increment("probes"); },
   decoy_sent(event, p) {
     if (!observedHosts.has(p.host)) observedHosts.set(p.host, new Set());
@@ -477,11 +547,18 @@ const render = {
     const total = Number(byId("blocked-count").textContent);
     setCheck("containment", `${total} blocked ${total === 1 ? "request" : "requests"}`, "flagged");
     byId("blocked-empty").hidden = true;
+    const existing = blockedRows.get(p.host);
+    if (existing) {
+      existing.count += 1;
+      existing.state.textContent = `Blocked ×${existing.count}`;
+      return;
+    }
     const title = element("div", "", "row-title");
     const state = element("strong", "Blocked");
     state.dataset.tone = "risk";
     title.append(element("strong", p.host), state);
     appendRow("blocked", title, element("p", p.error, "subtle"));
+    blockedRows.set(p.host, { state, count: 1 });
   },
   sandbox_stats(event, p) {
     const meter = element("meter", "");
@@ -500,6 +577,9 @@ const render = {
   },
   resource_limit_hit(event, p) {
     increment("limits");
+    limitHit = true;
+    for (const row of byId("timeline").querySelectorAll("[data-container-error]")) row.remove();
+    setRoundState(p.visit, `${p.kind[0].toUpperCase()}${p.kind.slice(1)} limit reached`, "risk");
     setCheck("containment", `Sandbox hit its ${p.kind} limit`, "flagged");
     byId("blocked-empty").hidden = true;
     appendRow("blocked", element("strong", `${p.visit} · ${p.kind} limit reached`));
@@ -508,10 +588,12 @@ const render = {
   sandbox_destroyed(event, p) {
     increment("destroyed");
     setVisitState(p.visit, "Sandbox closed", "finished");
-    if (byId("destroyed").textContent === byId("created").textContent) setPhase("verdict");
+    setRoundState(p.visit, "Sandbox closed", "done");
+    // A zero peak means the stats watcher never sampled, not that the browser used no memory.
+    const peak = p.peak_mem_mb > 0 ? ` · ${p.peak_mem_mb} MB peak` : "";
     sandboxRow(p.visit).replaceChildren(
       element("strong", `${p.visit} · Destroyed`),
-      element("p", `${p.lifetime_s}s lifetime · ${p.peak_mem_mb} MB peak`, "subtle"),
+      element("p", `${p.lifetime_s}s lifetime${peak}`, "subtle"),
     );
     activity(event, `Sandbox destroyed · ${p.visit}`);
   },
@@ -532,21 +614,30 @@ const render = {
     const label = p.verdict;
     stamp.textContent = label;
     activeResult = label;
-    stamp.dataset.tone = { Phishing: "risk", Suspicious: "warn", Inconclusive: "warn", "No evidence found": "good" }[label];
+    stamp.dataset.tone = { Phishing: "risk", Suspicious: "warn", Inconclusive: "neutral", "No evidence found": "good" }[label];
+    stageNote("verdict", label);
+    setPhase("verdict");
     for (const reason of p.reasons) {
-      appendRow("reasons", element("strong", `${reason.signal} · ${reason.signal === "S3" ? "Context · " : ""}${reason.text}`), ...citeLinks(reason.evidence));
+      appendRow("reasons", element("strong", `${reason.signal === "S3" ? "Context · " : ""}${reason.text}`), ...citeLinks(reason.evidence));
     }
+    for (const [id, entry] of hypothesisRows) if (entry.status === "open") setHypothesisChip(id, "untested");
     if (p.untested.length) {
       byId("untested").hidden = false;
       byId("untested").textContent = `Untested · ${p.untested.join(", ")}`;
     }
-    byId("decisions").hidden = playback;
-    if (p.action_taken === "blocked") recordDecision({ decision: "block", decided_by: p.decided_by });
-    else byId("decision").textContent = "No automatic action taken.";
+    const blocked = p.action_taken === "blocked";
+    byId("recommendation").hidden = false;
+    byId("recommendation").dataset.action = blocked ? "blocked" : "none";
+    byId("recommendation-action").textContent = blocked ? "Agent recommends: Block" : "Agent recommends: no block, review";
+    byId("recommendation-reason").textContent = p.reasons[0]?.text ?? "";
+    byId("decision-label").hidden = byId("decisions").hidden = playback;
+    byId("decision").textContent = "";
+    refreshBlocklist();
     activity(event, "Verdict reached", label);
     stop("Investigation complete", "complete");
   },
   decision(event, p) { recordDecision(p); },
+  blocklist_hit(event, p) { showBlocklistHit(p, false); },
   error(event, p) {
     if (captureOnly && p.where === "capture") {
       byId("verdict").textContent = "Screenshot unavailable";
@@ -557,6 +648,11 @@ const render = {
     if (p.where === "investigator" && p.message.includes("Planner unavailable, rules only")) {
       byId("planner-fallback").hidden = false;
       activity(event, "Planner unavailable, rules only");
+      return;
+    }
+    // A sandbox killed by its own limit reports "not running"; the verdict still follows.
+    if (/not running/i.test(p.message)) {
+      if (!limitHit) activity(event, "Sandbox stopped early", p.where).dataset.containerError = "";
       return;
     }
     stop(`${p.where}: ${p.message}`, "error");
@@ -571,16 +667,95 @@ function browserLabel(visit) {
   return name;
 }
 
-function closeApproval(visit) {
-  const entry = approvalCards.get(visit);
+function setHypothesisChip(id, status) {
+  const entry = hypothesisRows.get(id);
   if (!entry) return;
-  clearInterval(entry.timer);
-  entry.card.remove();
-  approvalCards.delete(visit);
+  entry.status = status;
+  entry.state.textContent = hypothesisChips[status] ?? status;
+  entry.state.dataset.status = status;
+}
+
+function roundCard(p) {
+  if (!(p.round > 1)) return;
+  byId("rounds-stage").hidden = false;
+  const card = element("article", "", "round-card");
+  const state = element("span", "Running", "round-state");
+  state.dataset.state = "running";
+  card.append(element("strong", `Round ${p.round} · ${browserLabel(p.visit)}`), state);
+  if (p.reason) card.append(element("p", p.reason, "subtle"));
+  appendRow("rounds", card);
+  roundCards.set(p.visit, state);
+}
+
+function setRoundState(visit, text, state) {
+  const badge = roundCards.get(visit);
+  if (!badge || (badge.dataset.state === "risk" && state === "done")) return;
+  badge.textContent = text;
+  badge.dataset.state = state;
+}
+
+function approvalStage() {
+  return stages.find((stage) => stage.dataset.phase === "approval");
+}
+
+function showApprovalShot(visit) {
+  const image = byId("approval-shot");
+  const path = latestShots.get(visit);
+  image.hidden = !path;
+  if (path) {
+    image.src = evidenceUrl(path);
+    image.alt = `${browserLabel(visit)} with the filled sign-in form`;
+  }
+}
+
+function openApprovalBanner(p) {
+  pendingApproval = p.visit;
+  byId("approval-banner-title").replaceChildren(
+    "The agent wants to submit the decoy login on ", element("strong", p.host || "this page"));
+  showApprovalShot(p.visit);
+  const seconds = Number(p.timeout_s) || 60;
+  byId("approval-timer-label").textContent = `Policy approves automatically in ${seconds} s if you don't answer`;
+  byId("approval-banner").hidden = false;
+  const bar = byId("approval-bar");
+  bar.style.transition = "none";
+  bar.style.transform = "scaleX(1)";
+  bar.getBoundingClientRect();
+  bar.style.transition = `transform ${seconds}s linear`;
+  bar.style.transform = "scaleX(0)";
+  byId("approval-result").textContent = playback ? "Recorded run: the answer was given at the time." : "";
+  for (const button of byId("approval-banner").querySelectorAll("[data-approval]")) button.disabled = playback;
+  approvalStage().dataset.waiting = "true";
+}
+
+async function answerApproval(visit, decision) {
+  const id = scanId;
+  const result = byId("approval-result");
+  for (const button of byId("approval-banner").querySelectorAll("[data-approval]")) button.disabled = true;
+  result.textContent = "Sending…";
+  try {
+    const response = await fetch(`/api/scans/${id}/approve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ visit, decision }),
+    });
+    if (id !== scanId) return;
+    result.textContent = response.ok
+      ? `${decision === "approve" ? "Approval" : "Denial"} sent. Waiting for the agent.`
+      : "This visit is no longer waiting.";
+  } catch {
+    if (id === scanId) result.textContent = "Could not reach the server. The policy decides on timeout.";
+  }
+}
+
+function closeApproval(visit) {
+  if (visit !== undefined && visit !== pendingApproval) return;
+  pendingApproval = undefined;
+  byId("approval-banner").hidden = true;
+  delete approvalStage().dataset.waiting;
 }
 
 function clearApprovals() {
-  for (const visit of [...approvalCards.keys()]) closeApproval(visit);
+  closeApproval();
 }
 
 function stop(message, state) {
@@ -610,9 +785,18 @@ function reset() {
   }
   activeResult = undefined;
   clearApprovals();
+  approveRest = false;
+  byId("blocklist-hit").hidden = true;
   document.querySelector(".workspace").replaceWith(initialWorkspace.cloneNode(true));
   for (const id of counterIds) byId(id).textContent = "0";
-  for (const cache of [hypothesisRows, sandboxRows, stepReasons, observedHosts, thirdPartyHosts]) cache.clear();
+  for (const cache of [hypothesisRows, sandboxRows, stepReasons, observedHosts, thirdPartyHosts, blockedRows, roundCards, visitedStages, latestShots, autoAnswered]) cache.clear();
+  limitHit = false;
+  for (const stage of stages) {
+    stage.removeAttribute("aria-current");
+    delete stage.dataset.complete;
+    delete stage.dataset.skipped;
+    stage.querySelector(".stage-note").textContent = "";
+  }
   lastEvent = 0;
   scanId = undefined;
   byId("case-id").textContent = "";
@@ -625,7 +809,12 @@ async function post(path, payload) {
     body: JSON.stringify(payload),
   });
   const data = await response.json();
-  if (!response.ok) throw new Error(typeof data.detail === "string" ? data.detail : "Check the request and try again.");
+  if (!response.ok) {
+    const detail = data.detail;
+    const error = new Error(typeof detail === "string" ? detail : detail?.message ?? "Check the request and try again.");
+    error.blocklist = detail?.blocklist;
+    throw error;
+  }
   return data;
 }
 
@@ -646,7 +835,7 @@ urlInput.addEventListener("input", selectPreset);
 function configureCaptureView(enabled) {
   captureOnly = enabled;
   byId("active-exchange").dataset.captureOnly = String(enabled);
-  byId("environment").textContent = enabled ? "Passive capture" : playback ? "Recorded investigation" : "Simulation workspace";
+  byId("environment").textContent = enabled ? "Passive capture" : playback ? "Recorded investigation" : liveService ? "Live investigation" : "Simulation workspace";
   byId("comparison-heading").textContent = enabled ? "Public-page screenshot" : "Browser comparison";
   byId("scanner-label").textContent = enabled ? "Public page" : "Scanner bot";
   byId("scanner-profile").textContent = enabled ? "Passive capture" : "Headless browser";
@@ -704,6 +893,7 @@ form.addEventListener("submit", async (event) => {
     connectScan(result.scan_id);
   } catch (error) {
     stop(error.message, "error");
+    if (error.blocklist) showBlocklistHit(error.blocklist, true);
   }
 });
 
@@ -721,6 +911,15 @@ if (replayRoute) {
     })
     .catch(() => {});
 }
+
+byId("approval-banner").addEventListener("click", (event) => {
+  const button = event.target.closest("[data-approval]");
+  if (!button || !pendingApproval || playback) return;
+  if (button.dataset.approval === "approve-rest") approveRest = true;
+  answerApproval(pendingApproval, button.dataset.approval === "deny" ? "deny" : "approve");
+});
+
+refreshBlocklist();
 
 document.addEventListener("click", async (event) => {
   const button = event.target.closest("[data-decision]");
@@ -752,12 +951,13 @@ fetch("/api/health")
     byId("scoreboard-run").hidden = !scoreboard_enabled;
     if (!demo && !scanId) byId("environment").textContent = "Public link capture";
     const live = live_presets && Object.keys(live_presets).length > 0;
+    liveService = Boolean(live);
     if (live) {  // presets start real sandboxed investigations on this VM's fixture hosts
       for (const button of presets) {
         const url = live_presets[button.dataset.preset];
         if (url) { button.dataset.url = url; button.hidden = false; } else button.hidden = true;
       }
-      if (!scanId) byId("environment").textContent = "Live sandbox investigations";
+      if (!scanId) byId("environment").textContent = "Live investigation";
     }
     byId("simulated-presets").hidden = !(demo || live);
   })

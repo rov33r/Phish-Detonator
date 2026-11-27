@@ -36,6 +36,13 @@
       <p id="scoreboard-result" class="subtle" role="status"></p>
       </div>
     </details>
+    <details id="blocklist-panel" class="disclosure" hidden>
+      <summary>Blocklist <span id="blocklist-count"></span></summary>
+      <div class="section-body">
+        <p class="subtle" id="blocklist-empty">No blocked links yet.</p>
+        <ul class="clean rows" id="blocklist" aria-label="Blocked links"></ul>
+      </div>
+    </details>
     <section class="conversation" aria-label="Investigation conversation">
       <section class="surface email-triage" id="email-triage" aria-labelledby="email-triage-heading" hidden>
         <div class="section-head"><h2 id="email-triage-heading">Email triage</h2></div>
@@ -54,20 +61,54 @@
             <span class="status" id="status" role="status">Ready to scan</span>
             <code id="case-id"></code>
           </div>
+          <p class="blocklist-hit" id="blocklist-hit" role="status" hidden></p>
+          <div class="scan-dock">
           <ol class="scan-stages" aria-label="Scan progress">
-            <li data-phase="plan">Plan</li>
-            <li data-phase="captures">Compare browsers</li>
-            <li data-phase="verdict">Review findings</li>
+            <li data-phase="plan" data-target="investigation"><strong>Plan</strong><span class="stage-note"></span></li>
+            <li data-phase="captures" data-target="comparison"><strong>Two browsers</strong><span class="stage-note"></span></li>
+            <li data-phase="followups" data-target="rounds-stage"><strong>Agent follow-ups</strong><span class="stage-note"></span></li>
+            <li data-phase="approval" data-target="approval-stage"><strong>Your approval</strong><span class="stage-note"></span></li>
+            <li data-phase="verdict" data-target="verdict-panel"><strong>Verdict</strong><span class="stage-note"></span></li>
           </ol>
-          <div class="workspace">
-            <section class="surface approval-stage" id="approval-stage" aria-labelledby="approval-heading" hidden>
-              <h2 id="approval-heading">Your approval</h2>
-              <div class="section-body">
-                <div id="approvals" aria-live="polite"></div>
-                <ul class="clean rows" id="approval-outcomes" aria-label="Approval outcomes" hidden></ul>
+          <section class="approval-banner" id="approval-banner" aria-labelledby="approval-banner-title" hidden>
+            <img id="approval-shot" alt="" hidden>
+            <div class="approval-body">
+              <p class="approval-title" id="approval-banner-title"></p>
+              <p class="subtle">Placeholders only, a throwaway identity</p>
+              <div class="approval-timer" aria-hidden="true"><span id="approval-bar"></span></div>
+              <p class="subtle" id="approval-timer-label"></p>
+              <div class="decisions">
+                <button type="button" class="primary" data-approval="approve">Approve</button>
+                <button type="button" data-approval="deny">Deny</button>
+                <button type="button" data-approval="approve-rest">Approve the rest of this scan</button>
               </div>
-            </section>
-            <section class="surface comparison live-investigation" aria-labelledby="comparison-heading">
+              <p class="subtle" id="approval-result" role="status"></p>
+            </div>
+          </section>
+          </div>
+          <div class="workspace">
+            <details class="surface investigation disclosure stage-section" id="investigation" open>
+              <summary>Investigation details</summary>
+              <div class="section-body investigation-body">
+                <div>
+                  <h3>What the agent is checking</h3>
+                  <div class="text-skeleton" id="plan-skeleton" aria-hidden="true" hidden>
+                    <span class="skeleton-line"></span><span class="skeleton-line"></span>
+                  </div>
+                  <p id="planner-fallback" class="subtle" role="status" hidden>Planner unavailable, rules only</p>
+                  <p id="plan" class="subtle">The investigator’s plan and questions will appear here.</p>
+                  <ul class="clean rows" id="hypotheses" hidden></ul>
+                </div>
+                <div>
+                  <details class="timeline-toggle" id="timeline-toggle">
+                    <summary>Full activity timeline</summary>
+                    <p id="timeline-empty" class="subtle">Sandbox dispatches and agent steps appear as they happen.</p>
+                    <ol class="clean timeline" id="timeline" hidden></ol>
+                  </details>
+                </div>
+              </div>
+            </details>
+            <section class="surface comparison live-investigation stage-section" id="comparison" aria-labelledby="comparison-heading">
               <h2 id="comparison-heading">Browser comparison</h2>
               <div class="section-head comparison-head">
                 <div><p id="comparison-state">Sample captures</p></div>
@@ -127,8 +168,18 @@
                 </ul>
               </div>
             </section>
+            <section class="surface rounds-stage stage-section" id="rounds-stage" aria-labelledby="rounds-heading" hidden>
+              <h2 id="rounds-heading">Agent follow-ups</h2>
+              <ol class="clean rounds" id="rounds"></ol>
+            </section>
+            <section class="surface approval-stage stage-section" id="approval-stage" aria-labelledby="approval-heading" hidden>
+              <h2 id="approval-heading">Your approval</h2>
+              <div class="section-body">
+                <ul class="clean rows" id="approval-outcomes" aria-label="Approval outcomes" hidden></ul>
+              </div>
+            </section>
             <div class="evidence-column">
-              <aside class="surface verdict" aria-labelledby="verdict-heading">
+              <aside class="surface verdict stage-section" id="verdict-panel" aria-labelledby="verdict-heading">
                 <h2 class="visually-hidden" id="verdict-heading">Verdict</h2>
                 <div class="section-body">
                   <div class="text-skeleton" id="verdict-skeleton" aria-hidden="true" hidden>
@@ -137,14 +188,19 @@
                   <p class="stamp" id="verdict">Awaiting evidence</p>
                   <p id="credential-finding" class="subtle" hidden></p>
                   <p id="legitimate-check" class="subtle" hidden>Legitimate login ruled out</p>
-                  <p id="decision" class="subtle" role="status">The verdict appears after the scan.</p>
-                  <ul class="clean rows" id="reasons" hidden></ul>
-                  <ul class="clean rows" id="rejected" hidden aria-label="Rejected claims"></ul>
-                  <p id="untested" class="subtle" hidden></p>
+                  <div class="recommendation" id="recommendation" hidden>
+                    <p><strong id="recommendation-action"></strong></p>
+                    <p class="subtle" id="recommendation-reason"></p>
+                  </div>
+                  <p class="decision-label" id="decision-label" hidden>Your decision</p>
                   <div id="decisions" class="decisions" hidden>
                     <button type="button" data-decision="block">Block</button>
                     <button type="button" data-decision="release">Release</button>
                   </div>
+                  <p id="decision" class="subtle" role="status">The verdict appears after the scan.</p>
+                  <ul class="clean rows" id="reasons" hidden></ul>
+                  <ul class="clean rows" id="rejected" hidden aria-label="Rejected claims"></ul>
+                  <p id="untested" class="subtle" hidden></p>
                 </div>
               </aside>
               <details class="surface disclosure">
@@ -168,29 +224,10 @@
                 </div>
               </details>
             </div>
-            <details class="surface investigation disclosure">
-              <summary>Investigation details</summary>
-              <div class="section-body investigation-body">
-                <div>
-                  <h3>Hypotheses</h3>
-                  <div class="text-skeleton" id="plan-skeleton" aria-hidden="true" hidden>
-                    <span class="skeleton-line"></span><span class="skeleton-line"></span>
-                  </div>
-                  <p id="planner-fallback" class="subtle" role="status" hidden>Planner unavailable, rules only</p>
-                  <p id="plan" class="subtle">The investigator’s plan and hypotheses will appear here.</p>
-                  <ul class="clean rows" id="hypotheses" hidden></ul>
-                </div>
-                <div>
-                  <h3>Activity timeline</h3>
-                  <p id="timeline-empty" class="subtle">Sandbox dispatches and agent steps appear as they happen.</p>
-                  <ol class="clean timeline" id="timeline" hidden></ol>
-                </div>
-              </div>
-            </details>
           </div>
           <footer class="counts" aria-label="Current scan counters">
             <span><b id="created">0</b> Created</span><span><b id="destroyed">0</b> Destroyed</span>
-            <span><b id="requests">0</b> Requests</span><span><b id="blocked-count">0</b> Blocked</span>
+            <span><b id="blocked-count">0</b> Blocked</span>
             <span><b id="limits">0</b> Limits hit</span><span><b id="probes">0</b> Bot probes</span>
           </footer>
         </div>
@@ -202,10 +239,8 @@
         <label class="url-field">URL to investigate
           <input inputmode="url" autocapitalize="off" spellcheck="false" type="url" name="url" id="url" placeholder="https://example.com/link" required autocomplete="off">
         </label>
-        <label>Scan mode
-          <select name="mode" id="mode"><option value="standard">Standard</option><option value="high_risk">High risk</option></select>
-        </label>
         <button class="primary" id="scan-button">Start scan</button>
+        <p class="subtle scan-note">The agent will ask before it submits anything.</p>
       </form>
       <div class="presets" id="simulated-presets" aria-label="Simulation presets">
         <span>Try a preset</span>
