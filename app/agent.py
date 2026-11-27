@@ -75,6 +75,24 @@ def _out_dir(scan_id: str, visit: str) -> pathlib.Path:
     return sandbox.out_dir(scan_id, visit)
 
 
+# ---------- decoy identity (6.4) ----------
+
+_FIRST = ("nora", "elin", "maja", "oskar", "linus", "ida", "hugo", "alva", "axel", "saga")
+_LAST = ("berg", "lund", "holm", "strand", "dahl", "ek", "sjoberg", "nyman", "falk", "wik")
+_WORDS = ("fjord", "lake", "pine", "birch", "harbor", "meadow", "granite", "aurora")
+
+
+def make_decoy(rng: random.Random | None = None) -> dict:
+    """Unique per scan, so a string match in network.jsonl proves where it went."""
+    rng = rng or random.SystemRandom()
+    email = (f"{rng.choice(_FIRST)}.{rng.choice(_LAST)}.{rng.getrandbits(24):06x}"
+             f"@{rng.choice(_WORDS)}-mail.com")
+    alphabet = "abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+    chars = [rng.choice(alphabet) for _ in range(15)] + [rng.choice("!#%*")]
+    rng.shuffle(chars)
+    return {"email": email, "password": "".join(chars)}
+
+
 # ---------- validation ----------
 
 def refs_in(snapshot: str) -> set[str]:
