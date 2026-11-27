@@ -1,0 +1,47 @@
+name: ci
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      # Dummy values so modules import in CI. Real secrets never live in the repo.
+      PD_RUNTIME: runc
+      VULTR_INFERENCE_KEY: ci-dummy
+      PD_MODEL: ci-dummy
+      PD_PUBLIC_IP_DASHED: 127-0-0-1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements*.txt
+
+      - name: Install
+        run: pip install -r requirements-dev.txt
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Repo rules (CLAUDE.md)
+        run: bash scripts/check_rules.sh
+
+      - name: Tests
+        run: pytest -q
+
+      - name: Secret scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

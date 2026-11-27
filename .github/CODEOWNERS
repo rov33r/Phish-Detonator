@@ -1,0 +1,27 @@
+# Visibility only: no approval is required to merge. Owners get a review request.
+# Lane A: the box
+/sandbox/                @PranavC225
+/deploy/                 @PranavC225
+/app/sandbox.py          @PranavC225
+/app/orchestrator.py     @PranavC225
+/app/storage.py          @PranavC225
+/app/vultr_api.py        @PranavC225
+# Lane B: the brain
+/fixtures/               @rov33r
+/app/llm.py              @rov33r
+/app/agent.py            @rov33r
+/app/verdict.py          @rov33r
+/app/brands.json         @rov33r
+# Lane C: the face
+/app/main.py             @BEKtesfish
+/app/templates/          @BEKtesfish
+/app/static/             @BEKtesfish
+/README.md               @BEKtesfish
+# Shared: everyone sees changes
+/app/db.py               @PranavC225 @rov33r @BEKtesfish
+/app/config.py           @PranavC225 @rov33r @BEKtesfish
+/.env.example            @PranavC225 @rov33r @BEKtesfish
+/docs/EVENTS.md          @PranavC225 @rov33r @BEKtesfish
+/CLAUDE.md               @PranavC225 @rov33r @BEKtesfish
+/.github/                @PranavC225 @rov33r @BEKtesfish
+/scripts/                @PranavC225 @rov33r @BEKtesfish

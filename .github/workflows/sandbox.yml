@@ -1,0 +1,44 @@
+# Builds the sandbox image and starts it under gVisor, only when sandbox/ changes.
+# Not a required check (it is slow), but do not merge a red run.
+name: sandbox
+on:
+  pull_request:
+    paths: ["sandbox/**", ".github/workflows/sandbox.yml"]
+  push:
+    branches: [main]
+    paths: ["sandbox/**", ".github/workflows/sandbox.yml"]
+
+jobs:
+  image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install gVisor
+        run: |
+          curl -fsSL https://gvisor.dev/archive.key | sudo gpg --dearmor -o /usr/share/keyrings/gvisor-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/gvisor-archive-keyring.gpg] https://storage.googleapis.com/gvisor/releases release main" | sudo tee /etc/apt/sources.list.d/gvisor.list
+          sudo apt-get update && sudo apt-get install -y runsc
+          sudo runsc install
+          sudo systemctl restart docker
+
+      - name: Build pd-sandbox
+        run: docker build -t pd-sandbox:latest sandbox/
+
+      - name: Start under gVisor as the pd user
+        run: docker run --rm --runtime=runsc --user 10001:10001 --entrypoint node pd-sandbox:latest -e "console.log('node ok')"
+
+      - name: Robot visit smoke test (once bot.mjs exists)
+        if: hashFiles('sandbox/bot.mjs') != ''
+        run: |
+          mkdir -p out && chmod 777 out
+          docker run --rm --runtime=runsc --user 10001:10001 --shm-size=1g -v "$PWD/out:/out" \
+            --entrypoint node pd-sandbox:latest bot.mjs https://example.com
+          ls -la out
+
+      - uses: actions/upload-artifact@v4
+        if: always() && hashFiles('out/**') != ''
+        with:
+          name: sandbox-out
+          path: out/
