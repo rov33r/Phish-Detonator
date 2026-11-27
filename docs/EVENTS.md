@@ -18,7 +18,7 @@ Every SSE message is `{"id": <event id>, "ts": <ISO 8601>, "type": "<type>", "pa
 | `approval` | B | `{visit, step, action, ref, typed: ["{{DECOY_EMAIL}}", "{{DECOY_PASSWORD}}"], checks: [{name, ok}], decision: "auto_approved" or "denied", reason}` (SPEC 6.6; never the decoy value itself) |
 | `screenshot` | B | `{visit, step, path}` |
 | `request_seen` | A | `{visit, method, host, url}` |
-| `decoy_sent` | B | `{host, url, field: "email" or "password", encoding: "plain", "url" or "base64"}` |
+| `decoy_sent` | B | `{visit, host, url, field: "email" or "password", encoding: "plain", "url" or "base64"}` |
 | `probe_seen` | A | `{visit, name}` |
 | `request_blocked` | A | `{visit, host, url, error}` (network lock stopped it; SPEC 5.7, 9.1 stage 5) |
 | `live_available` | A | `{visit, url}` (MJPEG stream ready, SPEC 11A.1) |
