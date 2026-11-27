@@ -166,6 +166,19 @@ def test_live_scan_of_a_blocked_link_is_refused(client, live, monkeypatch):
     assert db.all_scans() == []
 
 
+def test_blocked_demo_links_only_kit_and_mobile_are_refused(client, live, monkeypatch):
+    from app import blocklist, main
+
+    def blocked(url, exclude=None):
+        return {"url": url, "status": "blocked", "scan_id": "old", "verdict": "Phishing",
+                "decided_by": "agent", "decided_at": "2026-11-27T15:40:00+00:00"}
+
+    monkeypatch.setattr(blocklist, "lookup", blocked)
+    presets = main.live_presets()
+    codes = {name: client.post("/api/scans", json={"url": url}).status_code for name, url in presets.items()}
+    assert codes == {"legit": 202, "kit": 409, "mobile": 409, "bomb": 202, "inject": 202}
+
+
 def test_legitimate_submission_is_not_a_third_party_destination(client):
     scan = client.post("/api/scans", json={"url": PRESETS["legit"]}).json()
     events = read_events(client.get(f"/api/scans/{scan['scan_id']}/events"))
