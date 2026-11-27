@@ -102,9 +102,9 @@ async def _collector(path: str, request: Request) -> Response:
 async def _legit(path: str, request: Request) -> Response:
     if path in ("", "login") and request.method == "POST":
         return HTMLResponse(_page("Sign in - Vexalo", _login_card(
-            action="/login", error="Wrong password. Try again or reset your password.")))
+            action="/login", error="Wrong password. Try again or reset your password.") + BOT_PROTECTION))
     if path in ("", "login"):
-        return HTMLResponse(_page("Sign in - Vexalo", _login_card(action="/login")))
+        return HTMLResponse(_page("Sign in - Vexalo", _login_card(action="/login") + BOT_PROTECTION))
     return HTMLResponse(_page("Vexalo", "<h1>Page not found</h1>"), status_code=404)
 
 
@@ -222,6 +222,12 @@ def _login_card(action: str, error: str = "", form_id: str = "login") -> str:
 
 LOGO = ('<div class="logo"><svg width="28" height="28" viewBox="0 0 28 28" aria-hidden="true">'
         '<path d="M3 4h6l5 13 5-13h6L17 24h-6z" fill="#0f5cc0"/></svg><span>Vexalo</span></div>')
+
+# Legit sites run bot protection too (Cloudflare, reCAPTCHA): it reads webdriver and does
+# nothing visible. Proves S3 alone is not a scam (SPEC 9.2, A5).
+BOT_PROTECTION = """<script>
+window.__vexaloBotScore = navigator.webdriver ? 1 : 0;
+</script>"""
 
 NEWS = """<div class="card"><h1>Stockholm today</h1>
 <p>Light snow expected in the evening. Commuter trains run on the normal timetable.</p>

@@ -90,7 +90,8 @@ def test_collector_truncates_body(client, tmp_path):
 def test_legit_posts_to_itself_and_says_wrong_password(client):
     page = get(client, LEGIT)
     assert 'action="/login"' in page.text and "Vexalo" in page.text
-    assert "cdn-metrics" not in page.text and "<script" not in page.text
+    assert "cdn-metrics" not in page.text
+    assert "navigator.webdriver" in page.text and "location" not in page.text  # probes, never cloaks
     r = client.post("/login", data={"email": "x@y.z", "password": "p"}, headers={"Host": LEGIT})
     assert "Wrong password" in r.text
 
