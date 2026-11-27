@@ -179,6 +179,7 @@ def test_decoy_sent_from_network_log(rig):
     assert summary["decoy_sent_to"] == ["cdn-metrics.203-0-113-5.sslip.io"]
     sent = [p for t, p in rig["events"] if t == "decoy_sent"]
     assert {s["field"] for s in sent} == {"email", "password"}
+    assert {s["visit"] for s in sent} == {"victim"}  # the UI groups the trail by visit
 
 
 def test_browser_error_ends_visit(rig, monkeypatch):

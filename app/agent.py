@@ -350,7 +350,7 @@ def _decoy_sent(scan_id: str, visit: str, out: pathlib.Path, decoy: dict) -> lis
             host = req.get("host") or host_of(req.get("url", ""))
             if encoding and (host, field_name) not in seen:
                 seen.add((host, field_name))
-                item = {"host": host, "url": req.get("url"), "field": field_name, "encoding": encoding}
+                item = {"visit": visit, "host": host, "url": req.get("url"), "field": field_name, "encoding": encoding}
                 sent.append(item)
                 _emit(scan_id, "decoy_sent", item)
     return sent
