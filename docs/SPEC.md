@@ -266,7 +266,7 @@ The organizers recommend an approve-before-submit gate on irreversible browser a
 The investigator is the agent that owns the case. The victim agent (section 6) operates one browser; the investigator decides which visits to run, what they prove, and what to do about the link. All its text (plan, reasons, claims) is first person, short, and shown live in the UI.
 
 ### 6A.1 Flow
-1. **Plan.** One LLM call with the URL only. Output: hypotheses (max 5) as `{id, text, status: "open"}`. Always include H1 "The page hides from scanners", H2 "Credentials go to a host the brand does not own", H3 "The trap only shows for some visitors (device or region)". Emit `plan`.
+1. **Plan.** One LLM call with the URL only. Output: hypotheses (max 5) as `{id, text, status: "open"}`. Always include H1 "The page hides from scanners", H2 "Credentials go to a host the brand does not own", H3 "The trap only shows for some visitors (device or region)", and the counter-hypothesis H4 "This is a legitimate login (the brand's own site, single sign-on or a known login provider)". The agent argues against its own case: it may only block once code has refuted H4 (8.5). Emit `plan`.
 2. **Round 1 (fixed).** Robot visit and desktop victim visit in parallel (5.3, section 6). Round 1 never depends on the planner, so every scan produces evidence.
 3. **Review.** The host builds one summary per finished visit: final URL, title, login reached, decoy sent to (hosts), probes, blocked requests, last agent reason. Page-derived text stays inside `<untrusted_page>`. The investigator answers with exactly one tool call (6A.2) and updates hypothesis statuses (`open`, `supported`, `refuted`). Emit `hypothesis_update` for each change.
 4. **Round 2 and later (the agent decides).** The host validates the tool call, `orchestrator.dispatch` runs it in a fresh sandbox, emits `dispatch`, and returns the new summary. Repeat from step 3.
@@ -330,6 +330,9 @@ scans/<scan_id>/
   victim/agent.jsonl            (each observation summary, action, reason)
   <visit>/...                   (one folder per follow-up visit, same files, e.g. victim_mobile-3/)
   investigator.jsonl            (plan, each tool call with reason, hypothesis updates, claims)
+  decoy.json                    ({email, password}; written by the orchestrator at scan start)
+  <visit>/resource_limit.json   (written by the host when a visit hits a memory or time limit)
+  checks/destinations.jsonl     (one line per host that received the decoy, with the H4 checks, 8.5)
     verdict.json
 ```
 After the scan, upload the folder to Object Storage (section 12) and store presigned URLs (7 days) in the scan record.
@@ -337,15 +340,15 @@ After the scan, upload the folder to Object Storage (section 12) and store presi
 ### 8.2 Signals
 | Id | Signal | Source |
 |---|---|---|
-| S1 | Decoy email or password found in a request to a host not in the brand's owned list | `network.jsonl` |
-| S2 | Cloak Diff: robot final URL host differs from victim login-page host, or robot page has no password field while victim reached one | `robot.json` vs `agent.jsonl` |
-| S3 | Page read a bot-detection property during the victim visit | `probes.jsonl` |
+| S1 | Decoy **password** found in a request to a third-party host: not the same registrable domain as the login page, not owned by the brand, not a known login provider (8.5). The decoy email alone is shown as a fact, not a signal (analytics and marketing tools see emails) | `network.jsonl` |
+| S2 | Content swap: the robot page has no password field and is not a challenge page, while a victim visit reached a password form. Challenge page: HTTP 403, 429 or 503, or text matching captcha, "verify you are human", "checking your browser", "access denied" | `robot.json` (`final_url, title, text, status, has_password_field`) vs `agent.jsonl` (`password_field`, computed by code) |
+| S3 | Page read a bot-detection property during the victim visit. Context only: bot protection (Cloudflare, reCAPTCHA) does this on legit sites, so S3 never changes the verdict | `probes.jsonl` |
 | S4 | Brand shown does not match the host (brand not in registry for that host) | brand check (8.3) |
 | M1 | Gate before login (checkbox, "view document", fake CAPTCHA) | `agent.jsonl` step reasons |
-| M2 | Redirect chain crosses 2 or more registrable domains | `navigations.jsonl` |
+| M2 | Before submit, main-frame navigations cross 2 or more registrable domains | `navigations.jsonl` |
 | M3 | Free hosting or tunnel domain (`*.workers.dev`, `*.vercel.app`, `*.netlify.app`, `*.lovable.app`, `*.nip.io`, `*.sslip.io`, `*.trycloudflare.com`) | URL host |
-| M4 | After submit, navigation to the real brand domain | `navigations.jsonl` |
-| M5 | The page attacked the sandbox: a blocked internal request or a resource limit hit | `blocked.jsonl`, `crash.jsonl`, stats (11A.4) |
+| M4 | After the decoy password leaves, navigation from a host the brand does not own to one it does (the classic hand-off: legit sites log you in instead) | `navigations.jsonl` |
+| M5 | The page attacked the sandbox: a blocked internal request or a resource limit hit | `blocked.jsonl`, `crash.jsonl`, `resource_limit.json` (11A.4) |
 
 ### 8.3 Brand check
 One call to the vision model (`PD_VISION_MODEL`) with the login-page screenshot, page title, visible text (first 2,000 chars) and host. If no vision model is configured, the same call without the screenshot goes to `PD_MODEL`. Output `{"brand": "Vexalo" | null, "confidence": 0..1}`. Code compares with `brands.json`:
@@ -358,12 +361,20 @@ Add a few real brands with their owned login domains only, for credibility. Neve
 1. **Compute signals** S1 to S4 and M1 to M4 from the evidence files of all visits, with fixed code.
 2. **Check claims.** For each investigator claim: every `cite` must exist, and the cited line or file must support the claimed signal (an S1 claim must cite a `network.jsonl` line that contains the decoy in plain, URL-encoded or base64 form; an S2 claim must cite `robot.json` and an `agent.jsonl` line; and so on). A claim whose signal the code did not also compute, or whose citation does not support it, is rejected and emitted as `claim_rejected` with the reason.
 3. **Verdict from verified signals only:**
-   - Any of S1 to S4 → **Scam**.
-   - Else two or more of M1 to M5 → **Suspicious**.
-   - Else → **No evidence found**. Never output "safe".
-4. **Action.** On Scam with `action: "block"` from the investigator (or from the fallback), the scan's `decision` is set to `block` by the agent (`decided_by: "agent"`). The analyst can override with Release (`decided_by: "analyst"`).
+   - **Scam:** S1 and at least one of S2, S4 or M4. A password leaving to a third party is only a scam when the page also lies (shows a brand it does not own, hides from scanners, or hands the victim back to the real brand).
+   - Else **Suspicious:** S1 alone, or two or more of S2, S4, M1 to M5.
+   - Else **No evidence found**. Never output "safe". S3 is shown as context and never counts.
+4. **Action.** Only when H4 is refuted (8.5). On Scam with `action: "block"` from the investigator (or from the fallback), the scan's `decision` is set to `block` by the agent (`decided_by: "agent"`). The analyst can override with Release (`decided_by: "analyst"`).
 
 `verdict.json`: `{verdict, reasons: [{signal, text, evidence: [file or line refs]}], rejected_claims: [{claim, reason}], decoy: {email, password_masked}, robot_final_url, victim_login_host, password_sent_to: [hosts], blocked_requests: [{host, url}], hypotheses: [{id, text, status}], action_taken, untested: [text]}`.
+
+### 8.5 Innocent explanations (H4, the agent argues against itself)
+Before blocking, code checks every host that received the decoy password and writes one line per host to `checks/destinations.jsonl`: `{host, field, same_site, brand_owned, login_provider, followup}`.
+- `same_site`: same registrable domain as the login page (`login.acme.com` posting to `api.acme.com` is fine). Wildcard DNS hosts (`*.sslip.io`, `*.nip.io`) count as their own site.
+- `brand_owned`: host in the brand's list in `brands.json`.
+- `login_provider`: host matches `brands.json` `login_providers`, by login host, not whole domain (`accounts.google.com`, `login.microsoftonline.com`, `*.okta.com`, `*.auth0.com`, `*.onelogin.com`, `*.amazoncognito.com`, `*.b2clogin.com`). `docs.google.com` and `forms.office.com` are not login providers: password-collecting forms there stay suspicious.
+- `followup` (optional): the investigator may run `robot_followup` on the host. A real vendor serves a real site; a collector returns an empty page or 204. The summary is cited, not trusted.
+H4 is **refuted** when at least one password destination fails all three checks; code emits `hypothesis_update` for H4 with the reason in first person ("Could cdn-metrics be a login provider? It is not a known provider and Vexalo does not own it.") and cites `checks/destinations.jsonl:<line>`. Otherwise H4 is **supported** and the verdict cannot be Scam.
 
 ## 9. Test Sites (Fixtures)
 
@@ -387,13 +398,13 @@ One small FastAPI app on port 8081, routed by Caddy using the `Host` header. Pla
 Same stages, but stage 1 shows "This document can only be opened on a phone" unless `navigator.maxTouchPoints > 0` and the user agent contains `Android` or `iPhone`. The desktop victim reaches nothing; the investigator should dispatch `victim_mobile`, which reaches the login. This is the demo proof that the plan adapts to evidence.
 
 ### 9.2 Legit site
-Same Vexalo look. Form posts to its own host. No gate, no bot check.
+Same Vexalo look. Form posts to its own host. No gate, no cloaking. It runs a harmless bot-protection script that reads `navigator.webdriver` (as Cloudflare or reCAPTCHA do), so A5 proves S3 alone does not make a scam.
 
 ### 9.3 Expected results
 | Input | Expected verdict | Signals |
 |---|---|---|
-| Legit link | No evidence found | none |
-| Kit link | Scam | S1, S2, S3; M1, M3, M4, M5; three blocked requests |
+| Legit link | No evidence found | S3 and M3 shown as context; H4 supported |
+| Kit link | Scam | S1, S2, S4, M4 (plus S3, M1, M3, M5); H4 refuted; three blocked requests |
 | Bomb link (`/bomb`) | Suspicious | M3, M5; `resource_limit_hit`; host load flat |
 | Mobile-only kit link | Scam | Investigator dispatches `victim_mobile`; H3 supported; S1 from the mobile visit |
 
@@ -573,8 +584,8 @@ Acceptance tests (all must pass before feature freeze):
 | A2 | Victim visit on kit URL | Agent reaches login and submits in 15 steps or fewer, 3 runs of 3 |
 | A3 | Password trail | `decoy_sent` event names `cdn-metrics.<IP>.sslip.io` |
 | A4 | Probes | `probes.jsonl` contains `webdriver` for the kit run |
-| A5 | Legit URL | Verdict "No evidence found" |
-| A6 | Kit URL | Verdict "Scam" with S1, S2, S3 |
+| A5 | Legit URL | Verdict "No evidence found" although the page reads `navigator.webdriver` (S3) |
+| A6 | Kit URL | Verdict "Scam" with S1 and S2, S4, M4; H4 refuted with a `checks/destinations.jsonl` cite |
 | A7 | Lifecycle | `docker ps -a` shows no `pd-` containers 10 s after a scan |
 | A8 | Network lock | From a sandbox, `curl http://169.254.169.254/` and `curl http://<VM IP>:8000` fail |
 | A9 | Scoreboard | Robot `bot: true`, victim `bot: false` |
@@ -589,6 +600,7 @@ Acceptance tests (all must pass before feature freeze):
 | A18 | Resource bomb | `/bomb` scan: `resource_limit_hit` emitted, verdict Suspicious with M5, `docker ps -a` clean, host load stays under 2 |
 | A19 | Stats | `sandbox_stats` events arrive once per second; `/api/stats` totals match `docker` history |
 | A20 | Approval gate | Kit run: an `approval` event with `auto_approved` comes before `decoy_sent`; unit test: a submit after typing a non-placeholder value is `denied` |
+| A21 | False positives | Unit tests, none is Scam: probes only; login page posts to its own API host; password goes to `acme.okta.com`; robot gets a challenge page; email-only leak; password to a third party with no S2, S4 or M4 (Suspicious) |
 
 ## 17. Demo Script
 
