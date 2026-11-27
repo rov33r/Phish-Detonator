@@ -206,3 +206,49 @@ def test_failed_screenshot_does_not_end_visit(rig, monkeypatch):
     monkeypatch.setattr(agent, "_exec", flaky)
     summary = run(rig, KIT_SCRIPT)
     assert summary["stop_reason"] == "done" and summary["steps"] == 7
+
+
+def test_click_with_text_on_textbox_becomes_fill():
+    roles = agent.roles_in('- textbox "Email" [ref=e9]\n- checkbox "I am not a robot" [ref=e4]\n- button "Go" [ref=e7]')
+    assert roles == {"@e9": "textbox", "@e4": "checkbox", "@e7": "button"}
+    check = agent.validator(roles)
+    a = act("click", "@e9", agent.EMAIL)
+    check(a)
+    assert a["action"] == "fill" and a["text"] == agent.EMAIL
+    b = act("click", "@e4", agent.EMAIL)  # never type into a checkbox
+    check(b)
+    assert b["action"] == "click" and b["text"] is None
+    with pytest.raises(ValueError, match="not a text field"):
+        check(act("fill", "@e7", agent.PASSWORD))
+
+
+def test_resnapshot_when_form_not_rendered(rig, monkeypatch):
+    real, seen = rig["browser"], {"n": 0}
+
+    def slow(container, args, timeout=30):
+        if args[4] == "snapshot" and real.path == "/login" and seen["n"] == 0:
+            seen["n"] += 1
+            return 0, '- heading "Sign in" [ref=e1]'
+        return real(container, args, timeout)
+    monkeypatch.setattr(agent, "_exec", slow)
+    run(rig, KIT_SCRIPT)
+    assert seen["n"] == 1 and any(c[0] == "type" for c in rig["browser"].calls)
+
+
+def test_hanging_submit_does_not_end_visit(rig, monkeypatch):
+    real = rig["browser"]
+
+    def hang(container, args, timeout=30):
+        if args[4] == "click" and args[5] == "@e3":
+            real(container, args, timeout)  # the form is submitted and the page moves on
+            raise TimeoutError("agent-browser click timed out")
+        return real(container, args, timeout)
+    monkeypatch.setattr(agent, "_exec", hang)
+    assert run(rig, KIT_SCRIPT)["stop_reason"] == "done"
+
+
+def test_runner_exception_becomes_browser_error(rig, monkeypatch):
+    def boom(container, args, timeout=30):
+        raise OSError("docker went away")
+    monkeypatch.setattr(agent, "_exec", boom)
+    assert agent.run_victim("s1", KIT + "/", "pd-s1-victim", DECOY)["stop_reason"] == "browser_error"

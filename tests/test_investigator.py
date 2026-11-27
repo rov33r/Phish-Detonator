@@ -125,7 +125,6 @@ def test_next_step_dispatches_mobile_and_updates(scan, model):
     (step("robot_followup", host="evil.example.com"), "host must be"),
     (step("victim_retry"), "needs a goal"),
     (step("conclude", action=None), "action block or none"),
-    (step("victim_mobile", updates=[{"id": "H4", "status": "refuted", "reason": "x", "evidence": []}]), "cannot update H4"),
     (step("victim_mobile", updates=[{"id": "H1", "status": "supported", "reason": "x", "evidence": ["made/up.txt"]}]),
      "does not exist"),
 ])
@@ -216,3 +215,18 @@ def test_unchanged_status_is_not_re_emitted(scan, model):
     model["script"].append(step("victim_mobile", updates=[same]))
     inv.next_step("s1", summaries(scan), scan_dir=scan)
     assert not any(t == "hypothesis_update" for t, _ in model["events"])
+
+
+def test_signal_id_as_evidence_maps_to_its_cite(scan):
+    check = inv._validator(scan, {"H1", "H4"}, {"robot/robot.json"}, inv.TOOLS, {"S2": ["robot/robot.json"]})
+    s = step("victim_mobile", updates=[{"id": "H1", "status": "supported", "reason": "x", "evidence": ["S2"]}])
+    check(s)
+    assert s["updates"][0]["evidence"] == ["robot/robot.json"]
+
+
+def test_h4_and_unknown_updates_are_dropped(scan):
+    check = inv._validator(scan, {"H1", "H4"}, set(), inv.TOOLS)
+    s = step("victim_mobile", updates=[{"id": "H4", "status": "refuted", "reason": "x", "evidence": []},
+                                       {"id": "H9", "status": "open", "reason": "x", "evidence": []}])
+    check(s)
+    assert s["updates"] == []

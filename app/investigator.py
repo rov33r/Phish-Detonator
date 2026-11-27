@@ -219,7 +219,10 @@ def _cite_exists(scan_dir: pathlib.Path, cite: str) -> bool:
     return path.is_file() and (not m["line"] or int(m["line"]) <= len(path.read_text().splitlines()))
 
 
-def _validator(scan_dir: pathlib.Path, ids: set[str], cites: set[str], allowed: tuple[str, ...]):
+def _validator(scan_dir: pathlib.Path, ids: set[str], cites: set[str], allowed: tuple[str, ...],
+               signal_cites: dict[str, list[str]] | None = None):
+    signal_cites = signal_cites or {}
+
     def check(step: dict) -> None:
         tool = step.get("tool")
         if tool not in allowed:
@@ -232,9 +235,10 @@ def _validator(scan_dir: pathlib.Path, ids: set[str], cites: set[str], allowed: 
             raise ValueError("victim_retry needs a goal")
         if tool == "conclude" and step.get("action") not in ("block", "none"):
             raise ValueError("conclude needs action block or none")
-        for u in step.get("updates") or []:
-            if u["id"] not in ids or u["id"] == "H4":
-                raise ValueError(f"cannot update {u['id']}: use one of {', '.join(sorted(ids - {'H4'}))}")
+        # H4 is code-only and unknown ids mean nothing: drop those updates, do not fail the step
+        step["updates"] = [u for u in step.get("updates") or [] if u["id"] in ids and u["id"] != "H4"]
+        for u in step["updates"]:
+            u["evidence"] = [signal_cites.get(c, [c])[0] for c in u["evidence"]]  # "S2" -> its first cite
             for c in u["evidence"]:
                 if c not in cites and not _cite_exists(scan_dir, c):
                     raise ValueError(f"evidence {c!r} does not exist: cite the index or a visit's cite field")
@@ -267,7 +271,8 @@ def next_step(scan_id: str, summaries: list[dict], *, budget: dict | None = None
     try:
         reply = llm.chat_json([{"role": "system", "content": STEP_PROMPT}, {"role": "user", "content": user}],
                               STEP_SCHEMA, name="investigator_step", effort="medium", max_tokens=2048,
-                              validate=_validator(scan_dir, {h["id"] for h in hyps}, cites, allowed))
+                              validate=_validator(scan_dir, {h["id"] for h in hyps}, cites, allowed,
+                                                  {s: v["cite"] for s, v in index["signals"].items() if v["cite"]}))
         step = reply.data
     except llm.LLMError as e:
         _emit(scan_id, "error", {"where": "investigator", "message": f"Planner unavailable, rules only: {e}"[:300]})
