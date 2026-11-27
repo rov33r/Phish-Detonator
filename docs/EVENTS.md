@@ -19,11 +19,16 @@ Every SSE message is `{"id": <event id>, "ts": <ISO 8601>, "type": "<type>", "pa
 | `decoy_sent` | B | `{host, url, field: "email" or "password", encoding: "plain", "url" or "base64"}` |
 | `probe_seen` | A | `{visit, name}` |
 | `request_blocked` | A | `{visit, host, url, error}` (network lock stopped it; SPEC 5.7, 9.1 stage 5) |
-| `sandbox_destroyed` | A | `{visit, container}` |
+| `live_available` | A | `{visit, url}` (MJPEG stream ready, SPEC 11A.1) |
+| `sandbox_stats` | A | `{visit, mem_mb, mem_limit_mb, cpu_pct, pids}` (every 1 s, SPEC 11A.5) |
+| `host_stats` | A | `{load_1m, mem_used_pct}` (every 2 s while a scan runs) |
+| `resource_limit_hit` | A | `{visit, kind: "memory" or "time", peak_mb, limit_mb}` (SPEC 11A.4) |
+| `sandbox_destroyed` | A | `{visit, container, lifetime_s, peak_mem_mb}` |
 | `claim_rejected` | B | `{claim, reason}` (code did not find the cited evidence, SPEC 8.4) |
 | `verdict` | B | `{verdict, reasons: [{signal, text, evidence}], password_sent_to, action_taken: "blocked" or "none", decided_by: "agent", untested: [text]}` |
 | `decision` | C | `{decision: "block" or "release", decided_by: "agent" or "analyst"}` |
 | `evidence_uploaded` | A | `{files: {<path>: <presigned URL>}}` |
+| `report_ready` | C | `{report_url, manifest_sha256}` (signed report, SPEC 11A.3) |
 | `error` | any | `{where, message}` |
 
 Visit labels: `robot`, `victim`, then `<profile>-<n>` for follow-ups (for example `victim_mobile-3`). Cites use `<visit>/<file>:<line>` or `<visit>/step-NN.png`.

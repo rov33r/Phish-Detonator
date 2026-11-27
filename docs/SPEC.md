@@ -15,6 +15,7 @@ Version 1, 26 Nov 2026. Target: Vultr Agent Runtime Hackathon, 27 Nov 2026, 09:0
 9. [Test Sites (Fixtures)](#9-test-sites-fixtures)
 10. [API and Events](#10-api-and-events)
 11. [Web UI](#11-web-ui)
+11A. [Showcase Features](#11a-showcase-features)
 12. [Vultr Products](#12-vultr-products)
 13. [Containment Controls](#13-containment-controls)
 14. [Configuration](#14-configuration)
@@ -322,6 +323,7 @@ After the scan, upload the folder to Object Storage (section 12) and store presi
 | M2 | Redirect chain crosses 2 or more registrable domains | `navigations.jsonl` |
 | M3 | Free hosting or tunnel domain (`*.workers.dev`, `*.vercel.app`, `*.netlify.app`, `*.lovable.app`, `*.nip.io`, `*.sslip.io`, `*.trycloudflare.com`) | URL host |
 | M4 | After submit, navigation to the real brand domain | `navigations.jsonl` |
+| M5 | The page attacked the sandbox: a blocked internal request or a resource limit hit | `blocked.jsonl`, `crash.jsonl`, stats (11A.4) |
 
 ### 8.3 Brand check
 One call to the vision model (`PD_VISION_MODEL`) with the login-page screenshot, page title, visible text (first 2,000 chars) and host. If no vision model is configured, the same call without the screenshot goes to `PD_MODEL`. Output `{"brand": "Vexalo" | null, "confidence": 0..1}`. Code compares with `brands.json`:
@@ -335,7 +337,7 @@ Add a few real brands with their owned login domains only, for credibility. Neve
 2. **Check claims.** For each investigator claim: every `cite` must exist, and the cited line or file must support the claimed signal (an S1 claim must cite a `network.jsonl` line that contains the decoy in plain, URL-encoded or base64 form; an S2 claim must cite `robot.json` and an `agent.jsonl` line; and so on). A claim whose signal the code did not also compute, or whose citation does not support it, is rejected and emitted as `claim_rejected` with the reason.
 3. **Verdict from verified signals only:**
    - Any of S1 to S4 → **Scam**.
-   - Else two or more of M1 to M4 → **Suspicious**.
+   - Else two or more of M1 to M5 → **Suspicious**.
    - Else → **No evidence found**. Never output "safe".
 4. **Action.** On Scam with `action: "block"` from the investigator (or from the fallback), the scan's `decision` is set to `block` by the agent (`decided_by: "agent"`). The analyst can override with Release (`decided_by: "analyst"`).
 
@@ -369,7 +371,8 @@ Same Vexalo look. Form posts to its own host. No gate, no bot check.
 | Input | Expected verdict | Signals |
 |---|---|---|
 | Legit link | No evidence found | none |
-| Kit link | Scam | S1, S2, S3; M1, M3, M4; three blocked requests |
+| Kit link | Scam | S1, S2, S3; M1, M3, M4, M5; three blocked requests |
+| Bomb link (`/bomb`) | Suspicious | M3, M5; `resource_limit_hit`; host load flat |
 | Mobile-only kit link | Scam | Investigator dispatches `victim_mobile`; H3 supported; S1 from the mobile visit |
 
 ### 9.4 BotD page
@@ -386,6 +389,12 @@ Same Vexalo look. Form posts to its own host. No gate, no bot check.
 | POST | `/api/scans/{id}/decision` | `{decision: "block" | "release"}` |
 | POST | `/api/scoreboard` | Runs BotD for both profiles → `{robot, victim}` |
 | GET | `/api/health` | `{ok, model, runtime}` |
+| GET | `/api/scans/{id}/live/{visit}` | MJPEG live screen (11A.1) |
+| GET | `/replay/{scan_id}` | Replay UI (11A.2) |
+| GET | `/api/scans/{id}/report` | Signed HTML report (11A.3) |
+| GET | `/api/report-key` | Ed25519 public key |
+| POST | `/api/verify` | Manifest (and files) → which hashes and the signature match |
+| GET | `/api/stats` | Totals: sandboxes created, destroyed, running, blocked requests, limits hit (11A.5) |
 
 Event types and payloads: `docs/EVENTS.md` (the contract between lanes).
 
@@ -394,7 +403,7 @@ Public URL protection: at most `PD_MAX_SCANS` (default 2) scans run at once and 
 SQLite tables:
 | Table | Columns |
 |---|---|
-| `scans` | `id, url, mode, status, verdict, decoy_email, decoy_password, evidence_json, decision, decided_by, client_ip, created_at, finished_at` |
+| `scans` | `id, url, mode, status, verdict, decoy_email, decoy_password, evidence_json, decision, decided_by, client_ip, pinned, created_at, finished_at` |
 | `events` | `id, scan_id, ts, type, payload_json` |
 
 ## 11. Web UI
@@ -403,14 +412,38 @@ Single server-rendered page, vanilla JS, `EventSource` for SSE. No frontend fram
 
 | Area | Content |
 |---|---|
-| Top | URL input, mode toggle (standard / high-risk), Scan button, three preset buttons: "Legit Vexalo", "Phishing kit", "Mobile-only kit" |
+| Top | URL input, mode toggle (standard / high-risk), Scan button, four preset buttons: "Legit Vexalo", "Phishing kit", "Mobile-only kit", "Resource bomb" |
+| Live screen | The victim browser live (11A.1), large, with the current agent step reason as a caption |
 | Investigation board | Hypotheses with live status; a dispatch timeline where each sandbox appears, runs and is destroyed, with the investigator's first-person reason for every dispatch |
 | Middle left | **Scanner saw**: robot screenshot, final URL |
 | Middle right | **Victim saw**: step screenshots as a strip, current step reason |
 | Below | Password trail: decoy email (shown), password (masked), list of hosts that received it, highlighted |
 | Right column | Verdict badge, reasons, each reason links to its evidence; rejected claims shown struck through with the reason; "Blocked by agent" with an analyst Release override |
 | Containment panel | Blocked requests from the hostile page (metadata endpoint, host, app), each marked blocked |
-| Footer | Live counters: sandboxes created and destroyed, requests seen, bot probes; link to the scoreboard page |
+| Sandbox meters | Per sandbox: memory bar against its 2 GB cap, CPU, PIDs, lifetime; host load next to it (11A.5) |
+| Footer | Live counters from `/api/stats`: sandboxes created and destroyed, requests seen, blocked requests, limits hit, bot probes; links to the scoreboard page and the signed report |
+
+## 11A. Showcase Features
+
+Above the hackathon requirements. Each one makes the workflow or the containment visible. Features 1 to 5 are core; 6 is a stretch.
+
+### 11A.1 Live screen (Lane A recorder, Lane C UI)
+The recorder starts `Page.startScreencast` (`format: "jpeg"`, `quality: 60`, `maxWidth: 960`) on the active page and writes each frame to `/out/live.jpg` (write to `live.tmp`, then rename, so readers never see half a file), at most 5 frames per second. It also keeps every 5th frame as `/out/frames/NNNNN.jpg` for replay. The app serves `GET /api/scans/{id}/live/{visit}` as `multipart/x-mixed-replace` (MJPEG) from that file, so the UI needs only an `<img>`. Event `live_available {visit, url}` when the first frame exists. VERIFY that screencast frames arrive for a headful Chrome under Xvfb in gVisor; fallback: `agent-browser screenshot` once per second.
+
+### 11A.2 Replay and demo safety net (Lane C)
+`GET /replay/{scan_id}` plays a finished scan through the same UI: stored events at their original timing (speed control 1x, 2x), step screenshots and stored frames instead of the live screen. Scans with `pinned = 1` are never deleted by the 1-hour cleanup. `PD_DEMO_SCANS` maps each preset to a pinned scan ID; if a live scan fails during the demo, the preset button offers "Play recorded run". Record one perfect run of each preset as soon as it works.
+
+### 11A.3 Signed evidence report (Lane C)
+After the verdict, `app/report.py` writes `manifest.json`: SHA-256 of every evidence file, the verdict, the scan ID and time, and an Ed25519 signature over the canonical JSON (`cryptography` package). The private key lives on the host at `PD_REPORT_KEY_PATH` (created on first start if missing, never in the repo, never in a container). `GET /api/report-key` returns the public key. `GET /api/scans/{id}/report` returns one self-contained HTML page (screenshots inlined) with the plan, hypotheses, dispatch timeline, claims with citations, rejected claims, blocked requests, verdict and the manifest. `POST /api/verify` takes a manifest (and optionally files) and answers which hashes and the signature match. Demo line: "Anyone can verify this report. Change one byte and it fails."
+
+### 11A.4 Resource bomb, the second containment moment (Lane B fixture, Lane A detection)
+Fixture `vexalo-docs.<IP>.nip.io/bomb`: a "Loading your document" page whose script allocates memory without limit (arrays of 50 MB per tick) and then spins in a `while (true) {}` loop in a Web Worker. Expected: the sandbox hits its 2 GB memory cap, Chrome's renderer is killed or the page hangs, the 120 s wall clock ends the visit, the container is destroyed, the host is unaffected. Detection: the recorder logs `page.on('crash')` and browser disconnects to `/out/crash.jsonl`; the host reads the memory peak from stats (11A.5) and emits `resource_limit_hit {visit, kind: "memory" or "time", peak_mb, limit_mb}`. The investigator notes it, and the scan still ends with a verdict. New signal **M5**: the page attacked the sandbox (a blocked internal request or a resource limit hit). VERIFY how a cgroup OOM shows under gVisor (`docker inspect`, `memory.events`, or only the renderer crash); fallback: report the crash plus the peak memory.
+
+### 11A.5 Real numbers on screen (Lane A stats, Lane C UI)
+While a container runs, the host polls `docker stats --no-stream --format '{{json .}}'` once per second and emits `sandbox_stats {visit, mem_mb, mem_limit_mb, cpu_pct, pids}`. `sandbox_destroyed` carries `{lifetime_s, peak_mem_mb}`. The host also emits `host_stats {load_1m, mem_used_pct}` every 2 s from `/proc`, so the UI can show the host staying flat while a sandbox spikes. `GET /api/stats` returns totals: sandboxes created, destroyed, running, blocked requests, resource limits hit. The UI shows a memory bar per sandbox against its cap and the totals in the footer. VERIFY `docker stats` values under `runsc`; fallback: `docker exec <c> cat /sys/fs/cgroup/memory.current` or `/proc/meminfo` inside the container.
+
+### 11A.6 Paste a whole email (stretch, Lane B and C)
+`POST /api/scans` also accepts `{email_text}` (raw text, HTML or `.eml`). The host extracts links (plain URLs and `href` values, max 10, deduplicated). The investigator's plan picks up to 3 to test, with a first-person reason for each, and the scan runs one investigation per picked link. The report covers the whole email.
 
 ## 12. Vultr Products
 
@@ -437,7 +470,9 @@ Single server-rendered page, vanilla JS, `EventSource` for SSE. No frontend fram
 | Process isolation | gVisor runtime; Chrome and agent-browser never run on the host; CDP not published |
 | Secret hygiene | No keys in containers; decoy identity only; model sees placeholders, never real secrets |
 | Resource limits | 2 GB memory, 2 CPUs, 512 PIDs, 120 s wall clock per visit |
-| Lifecycle | New container per visit; `docker rm -f` in `finally`; scan directory uploaded then deleted locally after 1 hour |
+| Lifecycle | New container per visit; `docker rm -f` in `finally`; scan directory uploaded then deleted locally after 1 hour (pinned demo scans kept) |
+| Verifiable output | Signed manifest with SHA-256 of every evidence file; public key and verify endpoint (11A.3) |
+| Resource attack | Memory bomb hits the 2 GB cap, the visit ends, the host stays flat on screen (11A.4, 11A.5) |
 | Network | Private, link-local, metadata and host addresses rejected by iptables (DOCKER-USER and INPUT, 5.7); only the fixture port allowed on the VM IP; blocked attempts logged and shown |
 | Agent autonomy | Investigator tools are a fixed menu with validated args; sandbox and time budget per scan; claims verified by code |
 | Public URL abuse | Concurrent scan and sandbox caps, FIFO queue, per-IP rate limit (section 10) |
@@ -459,6 +494,8 @@ The video containment moment: the kit page runs its bot check, tries to reach th
 | `PD_INVESTIGATOR_MAX_SANDBOXES` / `PD_INVESTIGATOR_MAX_SECONDS` | `5` / `240` | Investigator budget (6A.2) |
 | `PD_MAX_SCANS` / `PD_MAX_SANDBOXES` | `2` / `4` | Global caps (section 10) |
 | `PD_RATE_LIMIT_PER_IP` | `5` | Scans per client IP per 10 minutes |
+| `PD_REPORT_KEY_PATH` | `/var/lib/phishdet/report.key` | Ed25519 private key for signed reports (host only) |
+| `PD_DEMO_SCANS` | `kit=<id>,mobile=<id>,legit=<id>,bomb=<id>` | Pinned recorded runs for the demo safety net |
 
 ## 15. Repository Layout
 
@@ -470,6 +507,8 @@ phish-detonator/
     sandbox.py         docker run / exec / rm, limits
     agent.py           loop from section 6
     investigator.py    plan, tool choice, claims (6A)
+    report.py          signed manifest, HTML report, verify (11A.3)
+    stats.py           docker stats and host stats polling (11A.5)
     llm.py             OpenAI client for Vultr
     verdict.py         rules from section 8
     storage.py         S3 upload, presigned URLs
@@ -481,7 +520,7 @@ phish-detonator/
   sandbox/
     Dockerfile, bot.mjs, victim-start.sh, recorder.mjs, act.mjs (fallback)
   fixtures/
-    app.py, templates/ (legit, kit stages, news, botd)
+    app.py, templates/ (legit, kit stages, mobile kit, news, botd, bomb)
   deploy/
     bootstrap.sh       Docker, gVisor, Caddy, systemd units
     netlock.sh         section 5.7
@@ -521,26 +560,35 @@ Acceptance tests (all must pass before feature freeze):
 | A12 | Containment on screen | Kit run: `blocked.jsonl` has the metadata, gateway and app attempts; UI shows them |
 | A13 | Claim check | Unit test: a claim citing a line without the decoy is rejected with `claim_rejected` |
 | A14 | Public URL caps | 5 scans started at once: at most 2 run, the rest queue; 6th scan from one IP in 10 minutes gets 429 |
+| A15 | Live screen | During a kit scan the MJPEG stream shows the victim browser moving |
+| A16 | Replay | `/replay/<kit scan>` plays the whole scan with screenshots after its files are pinned |
+| A17 | Signed report | `/api/verify` accepts the kit manifest; after changing one byte of one file it reports that file as changed |
+| A18 | Resource bomb | `/bomb` scan: `resource_limit_hit` emitted, verdict Suspicious with M5, `docker ps -a` clean, host load stays under 2 |
+| A19 | Stats | `sandbox_stats` events arrive once per second; `/api/stats` totals match `docker` history |
 
 ## 17. Demo Script
 
 | Time | Action | Line |
 |---|---|---|
-| 0:00 | Start page | "An analyst needs 23 minutes per reported phishing email. Scanners often say clean, because the page hides from them." |
+| 0:00 | Start page | "The scanner said this link is clean. It lied. Phishing pages hide from scanners, and an analyst needs 23 minutes per reported email." |
 | 0:20 | Preset "Legit Vexalo" | "First, a real login page." Verdict: No evidence found. |
-| 0:45 | Preset "Phishing kit" | The investigator writes its plan. Split screen: robot sees a news page; victim passes the gate and the bot check. |
+| 0:45 | Preset "Phishing kit" | The investigator writes its plan. Split screen: robot sees a news page; the live screen shows the victim passing the gate and the bot check. |
 | 1:20 | Containment panel | The page tries the cloud metadata endpoint and the host: three requests blocked. "The page attacked the sandbox. Nothing got out." |
 | 1:40 | Password trail | "The decoy password went here. Vexalo does not own this host." The agent concludes Scam, cites evidence, blocks the link. |
 | 2:00 | Preset "Mobile-only kit" | Desktop victim sees nothing. Investigator: "Desktop got nothing. I'll try as a phone." A new sandbox appears; the mobile visit reaches the login. |
-| 2:30 | Scoreboard | "BotD catches our robot and passes our victim browser. Every sandbox is gone." |
-| 2:45 | Vultr slide | Six products and their jobs. "Isolation makes autonomous execution shippable." |
+| 2:20 | Preset "Resource bomb" | The sandbox memory bar climbs to the 2 GB cap and the visit is killed; the host load next to it stays flat. "The page tried to take the machine down. It took down a disposable box." |
+| 2:35 | Signed report | Download the report, change one byte, `/api/verify` flags it. "Every claim has a receipt, and the receipts are signed." |
+| 2:45 | Scoreboard | "BotD catches our robot and passes our victim browser. Every sandbox is gone." |
+| 3:00 | Vultr slide | Six products and their jobs. "Isolation makes autonomous execution shippable." |
+
+Record a pinned run of every preset as soon as it works (11A.2). The video uses live runs where possible and recorded runs as the safety net.
 
 ## 18. Submission Checklist
 
 - Public GitHub repo with README (setup, architecture, limits).
 - Backend on the Vultr VM; all model calls through Vultr Serverless Inference.
 - Public demo URL.
-- Demo video with the containment moment.
+- Demo video with the containment moments (hostile page blocked, resource bomb absorbed).
 - Architecture screenshot.
 - "How did you use Vultr?": the six products from section 12 and their jobs.
 - All three team members added; event selected: Vultr Agent Runtime Hackathon.

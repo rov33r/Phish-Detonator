@@ -1,4 +1,6 @@
 .env
+*.key
+*.pem
 .env.*
 !.env.example
 __pycache__/

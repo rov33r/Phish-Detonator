@@ -69,14 +69,16 @@ Each lane owns its files. Touch the other lane's files only through the interfac
 
 | Lane | Developer | Owns |
 |---|---|---|
-| **A: the box** (sandbox, infra, evidence) | PranavC225 | `sandbox/`, `deploy/`, `app/sandbox.py`, `app/orchestrator.py`, `app/storage.py`, `app/vultr_api.py` |
+| **A: the box** (sandbox, infra, evidence) | PranavC225 | `sandbox/`, `deploy/`, `app/sandbox.py`, `app/orchestrator.py`, `app/storage.py`, `app/stats.py`, `app/vultr_api.py` |
 | **B: the brain** (investigator, agent, verdict, fixtures) | rov33r | `fixtures/`, `app/llm.py`, `app/investigator.py`, `app/agent.py`, `app/verdict.py`, `app/brands.json` |
-| **C: the face** (UI, live workflow, demo) | BEKtesfish | `app/main.py`, `app/templates/`, `app/static/`, scoreboard, demo presets, `README.md`, `docs/architecture.png`, video |
+| **C: the face** (UI, live workflow, demo) | BEKtesfish | `app/main.py`, `app/report.py`, `app/templates/`, `app/static/`, scoreboard, replay, demo presets, `README.md`, `docs/architecture.png`, video |
 | Shared (agree before changing) | all | `app/db.py`, `app/config.py`, `.env.example`, `docs/EVENTS.md`, `CLAUDE.md`, `.github/`, `scripts/`, `requirements*.txt`, `pyproject.toml` |
 
 Each lane owns the tests for its files (`tests/test_<module>.py`).
 
 Judging focus: a polished product where the workflow is visible on screen, and an agent that takes on a real task and owns its decisions. Lane C makes every step visible (plan and hypotheses, each sandbox dispatched and destroyed with the investigator's reason, each agent step with its screenshot, blocked attacks, evidence, verdict, rejected claims). Lane B makes the agent own the case (SPEC 6A): it plans, adapts the plan to evidence, picks follow-up visits, and blocks on Scam with cited evidence; code verifies every claim (SPEC 8.4).
+
+Showcase features (SPEC 11A), above the requirements: live screen of the victim browser (A + C), replay and recorded demo runs (C), signed evidence report (C), resource bomb containment moment (B fixture, A detection), real sandbox and host numbers on screen (A + C). Email paste is a stretch.
 
 ## 7. Interfaces (write these stubs first, then build behind them)
 
@@ -102,6 +104,14 @@ def next_step(scan_id: str, summaries: list[dict]) -> dict: ...     # one valida
 
 # app/verdict.py (Lane B)
 def decide(scan_id: str, claims: list[dict] | None = None) -> dict: ...  # computes signals, checks claims, returns verdict.json content
+
+# app/stats.py (Lane A, SPEC 11A.5)
+def watch(scan_id: str, visit: str, container: str) -> None: ...    # background thread: sandbox_stats every 1 s until the container is gone
+def totals() -> dict: ...                                           # for GET /api/stats
+
+# app/report.py (Lane C, SPEC 11A.3)
+def write_manifest(scan_id: str) -> dict: ...                       # SHA-256 of every evidence file + Ed25519 signature
+def verify(manifest: dict, files: dict[str, bytes] | None = None) -> dict: ...
 
 # app/orchestrator.py (Lane A)
 def run_scan(scan_id: str, url: str, mode: str) -> None: ...        # plan, round 1 (robot + victim in parallel), investigator loop,
