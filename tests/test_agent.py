@@ -268,3 +268,56 @@ def test_containment_events_emitted_live_once(rig):
     assert [b["host"] for b in blocked] == ["169.254.169.254", "172.30.0.1"]  # each line once, not per step
     assert blocked[0]["visit"] == "victim" and "REFUSED" in blocked[0]["error"]
     assert [p for t, p in rig["events"] if t == "probe_seen"] == [{"visit": "victim", "name": "navigator.webdriver"}]
+
+
+def test_auto_mode_never_asks_an_analyst(rig, monkeypatch):
+    monkeypatch.delenv("PD_APPROVAL_MODE", raising=False)
+    run(rig, KIT_SCRIPT)
+    assert "approval_requested" not in [t for t, _ in rig["events"]]
+
+
+def manual(monkeypatch, answer_with):
+    """Manual mode where the analyst answers while the agent waits (None: nobody answers)."""
+    monkeypatch.setenv("PD_APPROVAL_MODE", "manual")
+
+    def wait(event, seconds):
+        assert seconds == agent.APPROVAL_TIMEOUT_S and agent.pending("s1") == ["victim"]
+        return answer_with is not None and agent.answer("s1", "victim", answer_with)
+    monkeypatch.setattr(agent, "_wait", wait)
+
+
+def test_manual_approve_submits_after_the_analyst_clicks(rig, monkeypatch):
+    manual(monkeypatch, "approve")
+    summary = run(rig, KIT_SCRIPT)
+    types = [t for t, _ in rig["events"]]
+    ask = next(p for t, p in rig["events"] if t == "approval_requested")
+    gate = next(p for t, p in rig["events"] if t == "approval")
+    assert types.index("approval_requested") < types.index("approval")
+    assert ask == {"visit": "victim", "step": ask["step"], "host": ask["host"], "fields": ["email", "password"],
+                   "timeout_s": agent.APPROVAL_TIMEOUT_S}
+    assert gate["decision"] == "approved_by_analyst" and "analyst approved" in gate["reason"]
+    assert summary["stop_reason"] != "approval_denied" and agent.pending("s1") == []
+
+
+def test_manual_deny_stops_the_visit_without_submitting(rig, monkeypatch):
+    manual(monkeypatch, "deny")
+    summary = run(rig, KIT_SCRIPT)
+    gate = next(p for t, p in rig["events"] if t == "approval")
+    steps = [p for t, p in rig["events"] if t == "agent_step"]
+    assert gate["decision"] == "denied_by_analyst" and summary["stop_reason"] == "approval_denied"
+    assert steps[-1]["step"] == gate["step"]  # nothing ran after the denied submit
+    assert agent.pending("s1") == []
+
+
+def test_manual_timeout_falls_back_to_the_code_policy(rig, monkeypatch):
+    manual(monkeypatch, None)
+    summary = run(rig, KIT_SCRIPT)
+    gate = next(p for t, p in rig["events"] if t == "approval")
+    assert gate["decision"] == "timed_out" and "No analyst answered" in gate["reason"]
+    assert summary["stop_reason"] != "approval_denied"
+
+
+def test_answer_without_a_pending_question():
+    assert agent.answer("nope", "victim", "approve") is False
+    with pytest.raises(ValueError):
+        agent.answer("nope", "victim", "maybe")
