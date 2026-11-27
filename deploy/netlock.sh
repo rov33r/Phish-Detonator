@@ -6,6 +6,12 @@ set -euo pipefail
 SUBNET=172.30.0.0/24
 docker network inspect pd-net >/dev/null 2>&1 || docker network create --driver bridge --subnet "$SUBNET" pd-net
 
+# Docker's embedded resolver (127.0.0.11) on a user-defined network does not answer under gVisor,
+# even with --dns. Sandboxes mount this file over /etc/resolv.conf instead.
+install -d -m 755 /etc/phishdet
+printf 'nameserver 1.1.1.1\n' > /etc/phishdet/resolv.conf
+chmod 644 /etc/phishdet/resolv.conf
+
 insert() { # insert <chain> <rule...>: delete any copy, then put it on top
   local chain=$1; shift
   while iptables -D "$chain" "$@" 2>/dev/null; do :; done

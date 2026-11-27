@@ -22,4 +22,9 @@ apt-get install -y runsc caddy python3.12-venv git
 runsc install
 systemctl restart docker
 docker run --rm --runtime=runsc hello-world
+# The Vultr Ubuntu image enables ufw with only port 22 open.
+if command -v ufw >/dev/null; then
+  ufw allow 80/tcp
+  ufw allow 443/tcp
+fi
 echo "bootstrap ok"
