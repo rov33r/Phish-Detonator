@@ -12,6 +12,8 @@ Usage (needs VULTR_INFERENCE_KEY and PD_MODEL in .env):
   .venv/bin/python scripts/dev_scan.py            # kit
   .venv/bin/python scripts/dev_scan.py legit      # legit Vexalo
   .venv/bin/python scripts/dev_scan.py mobile     # mobile-only kit: the investigator should send a phone
+  .venv/bin/python scripts/dev_scan.py inject     # kit with prompt injection aimed at AI agents
+Every event is also recorded to scans/<id>/events.jsonl in the SSE shape, for replay in the UI.
 A Chrome window opens: that is the victim browser. Never point this at real phishing links:
 the laptop has no gVisor and no network lock.
 """
@@ -40,7 +42,9 @@ TARGETS = {
     "kit": f"http://vexalo-docs.localhost:{PORT}/",
     "legit": f"http://vexalo.localhost:{PORT}/",
     "mobile": f"http://vexalo-docs.localhost:{PORT}/m/",
+    "inject": f"http://vexalo-docs.localhost:{PORT}/x/",
 }
+RECORD: dict = {"path": None, "n": 0}  # every event also goes to scans/<id>/events.jsonl (SSE shape)
 PROBE_SCRIPT = """
 (() => {
   const log = (name) => console.debug('__PD_PROBE', name);
@@ -64,6 +68,12 @@ def say(kind: str, text: str) -> None:
 
 
 def emit(scan_id: str, type: str, payload: dict) -> None:
+    if RECORD["path"]:
+        RECORD["n"] += 1
+        line = {"id": RECORD["n"], "ts": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()) + "Z",
+                "type": type, "payload": payload}
+        with RECORD["path"].open("a") as f:
+            f.write(json.dumps(line) + "\n")
     if type == "agent_step":
         say(type, f"{payload['step']:>2} {payload['action']:<6} {payload.get('ref') or '':<5} "
                   f"{payload['reason']}  ({payload['model']})")
@@ -84,7 +94,9 @@ def emit(scan_id: str, type: str, payload: dict) -> None:
             print(f"      {h['id']} {h['text']}")
     elif type == "dispatch":
         say(type, f"{payload['visit']} ({payload['tool']}): {payload['reason']}")
-    elif type != "screenshot":
+    elif type in ("screenshot", "scan_started"):
+        pass
+    else:
         say(type, json.dumps(payload)[:300])
 
 
@@ -217,7 +229,9 @@ def main() -> None:
     scan_dir.mkdir(parents=True)
     decoy = agent.make_decoy()
     (scan_dir / "decoy.json").write_text(json.dumps(decoy))
+    RECORD["path"] = scan_dir / "events.jsonl"
     say("scan", f"{scan_id} -> {url}  decoy {decoy['email']}")
+    emit(scan_id, "scan_started", {"url": url, "mode": "standard", "decoy_email": decoy["email"]})
 
     env = {**os.environ, "PD_COLLECTOR_LOG": str(scan_dir / "collector.log")}
     fixtures = subprocess.Popen([sys.executable, "-m", "uvicorn", "fixtures.app:app", "--port", str(PORT),
