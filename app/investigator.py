@@ -337,11 +337,20 @@ def investigate(scan_id: str, round1: list[dict], dispatch: Callable[[dict], dic
     scan_dir = scan_dir or _scan_dir(scan_id)
     max_sandboxes = max_sandboxes or int(os.environ.get("PD_INVESTIGATOR_MAX_SANDBOXES", "5"))
     max_seconds = max_seconds or int(os.environ.get("PD_INVESTIGATOR_MAX_SECONDS", "240"))
-    start, summaries = now(), list(round1)
+    start, summaries, failed = now(), list(round1), 0
+    if not any(_has_evidence(s) for s in summaries):  # round 1 produced nothing: dispatching more will not help
+        return fallback_conclude(scan_id, scan_dir=scan_dir)["args"]
     for _ in range(max_sandboxes + 1):
         budget = {"sandboxes": max_sandboxes - len(summaries), "seconds": int(max_seconds - (now() - start))}
         step = next_step(scan_id, summaries, budget=budget, scan_dir=scan_dir)
         if step["tool"] == "conclude":
             return step["args"]
         summaries.append(dispatch(step))
+        failed += not _has_evidence(summaries[-1])
+        if failed >= 2:  # the sandbox keeps failing; stop spending budget on it
+            break
     return fallback_conclude(scan_id, scan_dir=scan_dir)["args"]
+
+
+def _has_evidence(summary: dict) -> bool:
+    return bool(summary.get("final_url"))

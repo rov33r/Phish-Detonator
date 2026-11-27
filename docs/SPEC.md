@@ -364,6 +364,7 @@ Add a few real brands with their owned login domains only, for credibility. Neve
    - **Phishing:** S1 and at least one of S2, S4 or M4. A password leaving to a third party is only phishing when the page also lies (shows a brand it does not own, hides from scanners, or hands the victim back to the real brand).
    - Else **Suspicious:** S1 alone, or two or more of S2, S4, M1 to M5.
    - Else **No evidence found**. Never output "safe". S3 is shown as context and never counts.
+   - **Inconclusive** when no visit produced evidence (every sandbox failed); never "No evidence found" then.
 4. **Action.** Only when H4 is refuted (8.5). On Phishing with `action: "block"` from the investigator (or from the fallback), the scan's `decision` is set to `block` by the agent (`decided_by: "agent"`). The analyst can override with Release (`decided_by: "analyst"`).
 
 `verdict.json`: `{verdict, reasons: [{signal, text, evidence: [file or line refs]}], rejected_claims: [{claim, reason}], decoy: {email, password_masked}, robot_final_url, victim_login_host, password_sent_to: [hosts], blocked_requests: [{host, url}], hypotheses: [{id, text, status}], action_taken, untested: [text]}`.

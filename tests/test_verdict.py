@@ -263,3 +263,12 @@ def test_s4_claim_citing_agent_step_survives_vision_check(tmp_path, monkeypatch)
     scan = write_scan(tmp_path / "s", **kit_scan(), extra={"victim/step-03.png": "png"})
     r = vd.decide("s", [claim("S4", "victim/agent.jsonl:3")], scan_dir=scan)
     assert r["rejected_claims"] == []
+
+
+def test_all_sandboxes_failed_is_inconclusive(tmp_path):
+    scan = tmp_path / "s"
+    scan.mkdir()
+    (scan / "decoy.json").write_text(json.dumps(DECOY))
+    (scan / "victim").mkdir()  # sandbox never started: no evidence files
+    r = vd.decide("s", scan_dir=scan, run_brand_check=False)
+    assert r["verdict"] == "Inconclusive" and r["action_taken"] == "none" and r["reasons"][0]["signal"] == "ERR"

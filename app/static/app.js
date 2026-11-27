@@ -460,7 +460,7 @@ const render = {
     const label = p.verdict;
     stamp.textContent = label;
     activeResult = label;
-    stamp.dataset.tone = { Phishing: "risk", Suspicious: "warn", "No evidence found": "good" }[label];
+    stamp.dataset.tone = { Phishing: "risk", Suspicious: "warn", Inconclusive: "warn", "No evidence found": "good" }[label];
     for (const reason of p.reasons) {
       appendRow("reasons", element("strong", `${reason.signal} · ${reason.signal === "S3" ? "Context · " : ""}${reason.text}`), ...citeLinks(reason.evidence));
     }
@@ -646,7 +646,7 @@ document.addEventListener("click", async (event) => {
 
 fetch("/api/health")
   .then((response) => response.json())
-  .then(({ demo, recordings, scoreboard_enabled }) => {
+  .then(({ demo, recordings, scoreboard_enabled, live_presets }) => {
     const group = byId("recorded-runs");
     const names = { kit: "Phishing kit", mobile: "Mobile-only kit", legit: "Legit Vexalo", inject: "Prompt injection" };
     for (const [key, id] of Object.entries(recordings ?? {})) {
@@ -657,7 +657,15 @@ fetch("/api/health")
     group.hidden = !group.querySelector("a");
     byId("scoreboard-run").hidden = !scoreboard_enabled;
     if (!demo && !scanId) byId("environment").textContent = "Public link capture";
-    byId("simulated-presets").hidden = !demo;
+    const live = live_presets && Object.keys(live_presets).length > 0;
+    if (live) {  // presets start real sandboxed investigations on this VM's fixture hosts
+      for (const button of presets) {
+        const url = live_presets[button.dataset.preset];
+        if (url) { button.dataset.url = url; button.hidden = false; } else button.hidden = true;
+      }
+      if (!scanId) byId("environment").textContent = "Live sandbox investigations";
+    }
+    byId("simulated-presets").hidden = !(demo || live);
   })
   .catch(() => status("Could not check service status", "error"));
 
