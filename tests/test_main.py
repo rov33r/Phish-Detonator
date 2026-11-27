@@ -190,51 +190,57 @@ def test_persisted_stream_receives_live_event_and_unsubscribes(monkeypatch):
     assert not listeners
 
 
-@pytest.mark.parametrize("http_status", [200, 403])
-def test_public_link_has_its_own_screenshot(client, monkeypatch, http_status):
-    from app import passive_capture
+@pytest.fixture
+def live(monkeypatch):
+    from app import orchestrator
+    started = []
+    monkeypatch.setenv("PD_FEATURE_ORCHESTRATOR", "1")
+    monkeypatch.setenv("PD_PUBLIC_IP_DASHED", "203-0-113-5")
+    monkeypatch.setenv("PD_ACTIVE_SCAN_HOSTS", "")
+    monkeypatch.setattr(orchestrator, "run_scan", lambda *a: started.append(("scan", a)))
+    monkeypatch.setattr(orchestrator, "run_capture", lambda *a: started.append(("capture", a)))
+    return started
 
-    target = "https://public.example/story"
-    png = b"\x89PNG\r\n\x1a\n synthetic capture"
 
-    def capture(url):
-        assert url == target
-        return url, "Actual page title", png, http_status
+def _wait(started, n=1):
+    import time
+    for _ in range(50):
+        if len(started) >= n:
+            return
+        time.sleep(0.02)
 
-    monkeypatch.setattr(passive_capture, "capture_url", capture)
-    response = client.post("/api/scans", json={"url": target})
-    assert response.status_code == 202
+
+def test_live_presets_are_real_fixture_urls(client, live):
+    presets = client.get("/api/health").json()["live_presets"]
+    assert presets["kit"] == "http://vexalo-docs.203-0-113-5.nip.io/"
+    assert presets["inject"].endswith("/x/") and presets["legit"] == "http://vexalo.203-0-113-5.sslip.io/"
+
+
+def test_fixture_host_runs_full_investigation(client, live):
+    response = client.post("/api/scans", json={"url": "http://vexalo-docs.203-0-113-5.nip.io/m/"})
+    assert response.status_code == 202 and response.json()["capture_only"] is False
+    _wait(live)
+    assert live[0][0] == "scan"
+
+
+def test_other_link_gets_sandboxed_capture_not_host_browser(client, live):
+    response = client.post("/api/scans", json={"url": "https://public.example/story"})
     assert response.json()["capture_only"] is True
-    path = f"/api/scans/{response.json()['scan_id']}"
-    events = read_events(client.get(f"{path}/events"))
-    assert [event["type"] for event in events] == ["scan_started", "robot_done"]
-    assert events[1]["payload"]["title"] == "Actual page title"
-    assert client.get(path).json()["verdict"] is None
-    assert client.get(path).json()["http_status"] == http_status
-    assert client.get(f"{path}/files/robot/final.png").content == png
-    assert client.post(f"{path}/decision", json={"decision": "block"}).status_code == 404
+    _wait(live)
+    assert live[0] == ("capture", (response.json()["scan_id"], "https://public.example/story"))
 
 
-def test_private_link_is_not_fetched(client):
-    response = client.post("/api/scans", json={"url": "http://127.0.0.1/"})
-    assert response.json()["capture_only"] is True
-    path = f"/api/scans/{response.json()['scan_id']}"
-    events = read_events(client.get(f"{path}/events"))
-    assert events[-1]["type"] == "error"
-    assert "publicly reachable" in events[-1]["payload"]["message"]
-    assert client.get(f"{path}/files/robot/final.png").status_code == 404
+def test_wildcard_allows_full_investigation_of_any_link(client, live, monkeypatch):
+    monkeypatch.setenv("PD_ACTIVE_SCAN_HOSTS", "*")
+    assert client.post("/api/scans", json={"url": "https://public.example/"}).json()["capture_only"] is False
 
 
-def test_capture_reports_access_gate_without_echoing_query(client, monkeypatch):
-    from app import passive_capture
+def test_live_scans_off_by_default(client, monkeypatch):
+    monkeypatch.delenv("PD_FEATURE_ORCHESTRATOR", raising=False)
+    assert client.post("/api/scans", json={"url": "https://public.example/"}).status_code == 503
 
-    result = "https://team.cloudflareaccess.com/cdn-cgi/access/login/public.example"
-    monkeypatch.setattr(passive_capture, "capture_url", lambda _: (
-        result + "?meta=redact-this#fragment", "Sign in", b"image", 200,
-    ))
-    response = client.post("/api/scans", json={"url": "https://public.example/"})
-    path = f"/api/scans/{response.json()['scan_id']}"
-    events = read_events(client.get(f"{path}/events"))
-    assert events[-1]["payload"]["final_url"] == result
-    assert "redact-this" not in str(events)
-    assert client.get(path).json()["access_gate"] == "cloudflare"
+
+def test_no_browser_runs_in_the_app_process():
+    import pathlib as pl
+    source = (pl.Path(__file__).resolve().parent.parent / "app" / "main.py").read_text()
+    assert "sync_playwright" not in source and "chromium" not in source.lower()

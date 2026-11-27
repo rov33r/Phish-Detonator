@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Literal
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Request
@@ -18,7 +18,7 @@ from fastapi.responses import FileResponse, PlainTextResponse, Response, Streami
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, HttpUrl
 
-from app import db, orchestrator, passive_capture, scoreboard
+from app import db, orchestrator, scoreboard
 from app.email_intake import extract_links, flags
 
 ROOT = Path(__file__).resolve().parent
@@ -224,38 +224,12 @@ async def play_demo(scan, delay):
             scan.changed.notify_all()
 
 
-async def play_capture(scan, state):
-    try:
-        await scan.emit("scan_started", {"url": scan.url, "mode": scan.mode, "decoy_email": None})
-        final_url, title, scan.screenshot, scan.http_status = await asyncio.to_thread(
-            passive_capture.capture_url, scan.url,
-        )
-        destination = urlsplit(final_url)
-        host = destination.hostname or ""
-        if ((host == "cloudflareaccess.com" or host.endswith(".cloudflareaccess.com"))
-                and destination.path.startswith("/cdn-cgi/access/")):
-            scan.access_gate = "cloudflare"
-        visible_url = urlunsplit((destination.scheme, destination.netloc, destination.path, "", ""))
-        await scan.emit("robot_done", {
-            "final_url": visible_url, "title": title, "screenshot": "robot/final.png",
-            "has_password_field": None,
-        })
-    except passive_capture.CaptureError as error:
-        await scan.emit("error", {"where": "capture", "message": str(error)})
-    finally:
-        async with scan.changed:
-            scan.status = "finished" if scan.screenshot is not None else "failed"
-            scan.changed.notify_all()
-        state.active_captures -= 1
-
-
 @asynccontextmanager
 async def lifespan(application):
     application.state.scans = {}
     application.state.tasks = set()
     application.state.demo = os.getenv("PD_FEATURE_FAKE_SCAN") == "1"
     application.state.delay = 0.38
-    application.state.active_captures = 0
     yield
     tasks = list(application.state.tasks)
     for task in tasks:
@@ -324,14 +298,26 @@ def configured_recordings():
             if sep and re.fullmatch(r"[a-zA-Z0-9_-]{1,80}", identifier.strip())}
 
 
+def live_presets() -> dict[str, str]:
+    """The owned fixture URLs on this VM; empty unless live investigations are on."""
+    ip = os.getenv("PD_PUBLIC_IP_DASHED", "")
+    if os.getenv("PD_FEATURE_ORCHESTRATOR") != "1" or not ip:
+        return {}
+    kit = f"http://vexalo-docs.{ip}.nip.io"
+    return {"legit": f"http://vexalo.{ip}.sslip.io/", "kit": f"{kit}/", "mobile": f"{kit}/m/",
+            "bomb": f"{kit}/bomb", "inject": f"{kit}/x/"}
+
+
 def orchestrator_enabled(url: str) -> bool:
-    """Only run the active browser workflow against explicitly authorized hosts."""
+    """Full investigation (victim browser, decoy identity) only for owned fixture hosts and hosts in
+    PD_ACTIVE_SCAN_HOSTS; `*` allows every link. Everything else gets a sandboxed robot capture."""
     if os.getenv("PD_FEATURE_ORCHESTRATOR") != "1":
         return False
     host = (urlsplit(url).hostname or "").lower().rstrip(".")
     allowed = {item.strip().lower().rstrip(".") for item in os.getenv("PD_ACTIVE_SCAN_HOSTS", "").split(",")
                if item.strip()}
-    return bool(host and host in allowed)
+    allowed |= {(urlsplit(preset).hostname or "") for preset in live_presets().values()}
+    return bool(host) and ("*" in allowed or host in allowed)
 
 
 @app.get("/")
@@ -344,7 +330,7 @@ async def health(request: Request):
     return {"ok": True, "model": os.getenv("PD_MODEL"), "runtime": os.getenv("PD_RUNTIME", "runsc"),
             "demo": getattr(request.app.state, "demo", False), "recordings": configured_recordings(),
             "scoreboard_enabled": os.getenv("PD_FEATURE_ORCHESTRATOR") == "1"
-            and bool(os.getenv("PD_PUBLIC_IP_DASHED"))}
+            and bool(os.getenv("PD_PUBLIC_IP_DASHED")), "live_presets": live_presets()}
 
 
 @app.post("/api/scans", status_code=202)
@@ -354,35 +340,26 @@ async def start_scan(body: ScanInput, request: Request):
     demo = url in PRESETS.values()
     if demo and not state.demo:
         raise HTTPException(503, "Simulated scans are disabled")
-    active = not demo and orchestrator_enabled(url)
-    if not demo and state.active_captures >= 2:
-        if not active:
-            raise HTTPException(429, "Two screenshots are in progress. Try again shortly.")
-    if not demo and not active and body.mode != "standard":
-        raise HTTPException(422, "Public link screenshots use Standard mode.")
     scan_id = uuid4().hex
-    if active:
+    if not demo:
+        if os.getenv("PD_FEATURE_ORCHESTRATOR") != "1":
+            raise HTTPException(503, "Live scans are not enabled on this server")
+        active = orchestrator_enabled(url)
+        if not active and body.mode != "standard":
+            raise HTTPException(422, "Links outside the active-scan list use Standard mode.")
         client_ip = request.client.host if request.client else None
         await asyncio.to_thread(db.update_scan, scan_id, url=url, mode=body.mode, status="queued",
-                                client_ip=client_ip)
-        thread = threading.Thread(target=orchestrator.run_scan, args=(scan_id, url, body.mode), daemon=True)
-        thread.start()
-        return {"scan_id": scan_id, "queued_position": None, "capture_only": False}
-    scan = Scan(url, body.mode, capture_only=not demo)
-    completed_captures = [key for key, previous in state.scans.items()
-                          if previous.capture_only and previous.status != "running"]
-    for expired in completed_captures[:-19]:
-        del state.scans[expired]
+                                client_ip=client_ip, capture_only=not active)
+        # Both paths run in sandboxes: a full investigation, or a robot-only capture without a decoy.
+        target, args = (orchestrator.run_scan, (scan_id, url, body.mode)) if active else (orchestrator.run_capture, (scan_id, url))
+        threading.Thread(target=target, args=args, daemon=True).start()
+        return {"scan_id": scan_id, "queued_position": None, "capture_only": not active}
+    scan = Scan(url, body.mode)
     state.scans[scan_id] = scan
-    if demo:
-        job = play_demo(scan, state.delay)
-    else:
-        state.active_captures += 1
-        job = play_capture(scan, state)
-    task = asyncio.create_task(job)
+    task = asyncio.create_task(play_demo(scan, state.delay))
     state.tasks.add(task)
     task.add_done_callback(state.tasks.discard)
-    return {"scan_id": scan_id, "queued_position": None, "capture_only": scan.capture_only}
+    return {"scan_id": scan_id, "queued_position": None, "capture_only": False}
 
 
 @app.get("/api/scoreboard")

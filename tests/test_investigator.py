@@ -243,3 +243,17 @@ def test_signal_text_in_claim_maps_back_to_id(scan):
 
 def test_claim_signal_is_an_enum():
     assert inv.STEP_SCHEMA["properties"]["claims"]["items"]["properties"]["signal"]["enum"][0] == "S1"
+
+
+def test_no_dispatch_when_round1_produced_nothing(scan, model):
+    empty = [{"visit": "robot", "kind": "robot"}, {"visit": "victim", "kind": "victim"}]
+    result = inv.investigate("s1", empty, lambda s: pytest.fail("must not dispatch"), scan_dir=scan)
+    assert result["untested"] == ["Planner unavailable, rules only"] and not model["prompts"]
+
+
+def test_stops_after_two_failed_dispatches(scan, model):
+    model["script"] += [step("victim_mobile"), step("victim_retry", goal="try again")]
+    calls = []
+    result = inv.investigate("s1", summaries(scan), lambda s: calls.append(s) or {"visit": "x", "kind": "victim"},
+                             scan_dir=scan, max_sandboxes=6)
+    assert len(calls) == 2 and "claims" in result

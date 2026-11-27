@@ -202,10 +202,11 @@
       </form>
       <div class="presets" id="simulated-presets" aria-label="Simulation presets">
         <span>Try a preset</span>
-        <button type="button" data-url="https://vexalo.example/login" aria-pressed="false">Legit Vexalo</button>
-        <button type="button" data-url="https://vexalo-docs.example/share" aria-pressed="false">Phishing kit</button>
-        <button type="button" data-url="https://vexalo-docs.example/m/" aria-pressed="false">Mobile-only kit</button>
-        <button type="button" data-url="https://vexalo-docs.example/bomb" aria-pressed="false">Resource bomb</button>
+        <button type="button" data-preset="legit" data-url="https://vexalo.example/login" aria-pressed="false">Legit Vexalo</button>
+        <button type="button" data-preset="kit" data-url="https://vexalo-docs.example/share" aria-pressed="false">Phishing kit</button>
+        <button type="button" data-preset="mobile" data-url="https://vexalo-docs.example/m/" aria-pressed="false">Mobile-only kit</button>
+        <button type="button" data-preset="bomb" data-url="https://vexalo-docs.example/bomb" aria-pressed="false">Resource bomb</button>
+        <button type="button" data-preset="inject" data-url="" aria-pressed="false" hidden>Prompt injection</button>
       </div>
     <nav class="presets" id="recorded-runs" aria-label="Recorded runs" hidden><span>Recorded runs</span></nav>
     <details class="email-input">

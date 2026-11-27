@@ -144,6 +144,32 @@ def _wait_for_slot(scan_id: str) -> threading.Semaphore:
     return scans
 
 
+CAPTURE_REASON = ("This link is not on the active-scan list, so I only send a robot in a sandbox to take a "
+                  "screenshot. No decoy identity is submitted.")
+
+
+def run_capture(scan_id: str, url: str) -> None:
+    """Robot-only visit in a fresh sandbox for links outside the active-scan list. Never raises.
+
+    Same containment as a full scan (gVisor, network lock, limits); no victim, no decoy, no verdict.
+    """
+    scans = _wait_for_slot(scan_id)
+    try:
+        _scan_dir(scan_id).mkdir(parents=True, exist_ok=True)
+        db.update_scan(scan_id, url=url, mode="standard", status="running", capture_only=True)
+        db.emit(scan_id, "scan_started", {"url": url, "mode": "standard", "decoy_email": None})
+        db.emit(scan_id, "dispatch", {"visit": "robot", "profile": "robot", "tool": "robot", "reason": CAPTURE_REASON,
+                                      "round": 1, "budget_left": {"sandboxes": 0, "seconds": 0}})
+        _run_visit(scan_id, "robot", "robot", _robot(scan_id, "robot", url))
+        captured = (sandbox.out_dir(scan_id, "robot") / "final.png").is_file()
+        db.update_scan(scan_id, status="finished" if captured else "failed")
+    except Exception as exc:
+        _error(scan_id, "capture", exc)
+        db.update_scan(scan_id, status="failed")
+    finally:
+        scans.release()
+
+
 def run_scan(scan_id: str, url: str, mode: str = "standard") -> None:
     """Plan, round 1 (robot and victim in parallel), investigator loop, verdict. Never raises."""
     scans = _wait_for_slot(scan_id)
