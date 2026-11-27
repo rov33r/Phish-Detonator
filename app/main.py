@@ -3,10 +3,11 @@
 import asyncio
 import json
 import os
+import re
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Literal
 from uuid import uuid4
 
@@ -15,6 +16,7 @@ from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, HttpUrl
 
+from app import db, scoreboard
 from app.email_intake import extract_links, flags
 
 ROOT = Path(__file__).resolve().parent
@@ -255,11 +257,39 @@ class DecisionInput(BaseModel):
     decision: Literal["block", "release"]
 
 
-def find_scan(request, scan_id):
-    scan = request.app.state.scans.get(scan_id)
-    if scan is None:
+def demo_scan(request, scan_id):
+    return getattr(request.app.state, "scans", {}).get(scan_id)
+
+
+def scan_directory(scan_id):
+    if not re.fullmatch(r"[a-zA-Z0-9_-]{1,80}", scan_id):
         raise HTTPException(404, "Scan not found")
-    return scan
+    root = Path(os.getenv("PD_SCANS_DIR", "scans")).resolve()
+    directory = (root / scan_id).resolve()
+    if directory.parent != root:
+        raise HTTPException(404, "Scan not found")
+    return directory
+
+
+def recorded_events(scan_id):
+    path = scan_directory(scan_id) / "events.jsonl"
+    if not path.is_file() or path.is_symlink():
+        return []
+    try:
+        return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    except (OSError, ValueError) as error:
+        raise HTTPException(404, "Recording unavailable") from error
+
+
+def public_record(scan_id, record):
+    allowed = ("url", "mode", "status", "verdict", "decision", "decided_by")
+    return {"id": scan_id, **{key: record[key] for key in allowed if key in record}}
+
+
+def configured_recordings():
+    pairs = (part.partition("=") for part in os.getenv("PD_DEMO_SCANS", "").split(","))
+    return {label.strip(): identifier.strip() for label, sep, identifier in pairs
+            if sep and re.fullmatch(r"[a-zA-Z0-9_-]{1,80}", identifier.strip())}
 
 
 @app.get("/")
@@ -270,7 +300,7 @@ async def index():
 @app.get("/api/health")
 async def health(request: Request):
     return {"ok": True, "model": os.getenv("PD_MODEL"), "runtime": os.getenv("PD_RUNTIME", "runsc"),
-            "demo": getattr(request.app.state, "demo", False)}
+            "demo": getattr(request.app.state, "demo", False), "recordings": configured_recordings()}
 
 
 @app.post("/api/scans", status_code=202)
@@ -287,16 +317,80 @@ async def start_scan(body: ScanInput, request: Request):
     return {"scan_id": scan_id, "queued_position": None}
 
 
+@app.get("/api/scoreboard")
+def saved_scoreboard():
+    return scoreboard.latest()
+
+
+@app.get("/replay/{scan_id}")
+def replay_page(scan_id: str):
+    if not recorded_events(scan_id):
+        raise HTTPException(404, "Recording not found")
+    return FileResponse(ROOT / "templates" / "index.html")
+
+
 @app.get("/api/scans/{scan_id}")
 async def scan_record(scan_id: str, request: Request):
-    scan = find_scan(request, scan_id)
-    return {"id": scan_id, "url": scan.url, "mode": scan.mode, "status": scan.status,
-            "verdict": scan.verdict, "decision": scan.decision, "decided_by": scan.decided_by}
+    scan = demo_scan(request, scan_id)
+    if scan is not None:
+        return public_record(scan_id, vars(scan))
+    scan_directory(scan_id)
+    record = await asyncio.to_thread(db.get_scan, scan_id)
+    if record is not None:
+        return public_record(scan_id, record)
+    history = await asyncio.to_thread(recorded_events, scan_id)
+    if not history:
+        raise HTTPException(404, "Scan not found")
+    started = next((event["payload"] for event in history if event["type"] == "scan_started"), {})
+    outcome = next((event["payload"] for event in reversed(history) if event["type"] == "verdict"), {})
+    return public_record(scan_id, {
+        **started, "status": "finished" if outcome else "incomplete", "verdict": outcome.get("verdict"),
+    })
+
+
+def sse_event(event):
+    return f"id: {event['id']}\ndata: {json.dumps(event)}\n\n"
+
+
+async def replay_recording(history, cursor):
+    for event in history:
+        if event["id"] > cursor:
+            yield sse_event(event)
+
+
+async def stream_persisted(scan_id, cursor):
+    loop = asyncio.get_running_loop()
+    changed = asyncio.Event()
+
+    def listener(event):
+        if event["scan_id"] == scan_id:
+            loop.call_soon_threadsafe(changed.set)
+
+    db.subscribe(listener)
+    try:
+        while True:
+            changed.clear()
+            batch = await asyncio.to_thread(db.events, scan_id, cursor)
+            for event in batch:
+                cursor = event["id"]
+                yield sse_event(event)
+            status = (await asyncio.to_thread(db.get_scan, scan_id) or {}).get("status")
+            if status in {"finished", "failed", "error"}:
+                # A final event can land between the first event query and the status query.
+                for event in await asyncio.to_thread(db.events, scan_id, cursor):
+                    yield sse_event(event)
+                break
+            try:
+                await asyncio.wait_for(changed.wait(), timeout=10)
+            except TimeoutError:
+                yield ": keepalive\n\n"
+    finally:
+        db.unsubscribe(listener)
 
 
 @app.get("/api/scans/{scan_id}/events")
 async def scan_events(scan_id: str, request: Request, after: int = 0):
-    scan = find_scan(request, scan_id)
+    scan = demo_scan(request, scan_id)
     last_id = request.headers.get("Last-Event-ID", "")
     cursor = max(0, int(last_id) if last_id.isascii() and last_id.isdecimal() and len(last_id) < 15 else after)
 
@@ -322,13 +416,27 @@ async def scan_events(scan_id: str, request: Request, after: int = 0):
             if finished:
                 break
 
-    return StreamingResponse(stream(), media_type="text/event-stream",
+    if scan is not None:
+        events = stream()
+    else:
+        scan_directory(scan_id)
+        record = await asyncio.to_thread(db.get_scan, scan_id)
+        if record is not None:
+            events = stream_persisted(scan_id, cursor)
+        else:
+            history = await asyncio.to_thread(recorded_events, scan_id)
+            if not history:
+                raise HTTPException(404, "Scan not found")
+            events = replay_recording(history, cursor)
+    return StreamingResponse(events, media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 @app.post("/api/scans/{scan_id}/decision")
 async def decide(scan_id: str, body: DecisionInput, request: Request):
-    scan = find_scan(request, scan_id)
+    scan = demo_scan(request, scan_id)
+    if scan is None:
+        raise HTTPException(404, "Editable scan not found")
     if scan.verdict is None:
         raise HTTPException(409, "Wait for the verdict before making a decision")
     scan.decision = body.decision
@@ -340,7 +448,23 @@ async def decide(scan_id: str, body: DecisionInput, request: Request):
 
 @app.get("/api/scans/{scan_id}/files/{path:path}")
 async def evidence(scan_id: str, path: str, request: Request):
-    scan = find_scan(request, scan_id)
+    scan = demo_scan(request, scan_id)
+    if scan is None:
+        directory = scan_directory(scan_id)
+        relative = PurePosixPath(path)
+        media = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+                 ".json": "text/plain", ".jsonl": "text/plain", ".txt": "text/plain"}
+        if (relative.is_absolute() or ".." in relative.parts or "\\" in path
+                or relative.name == "decoy.json" or relative.suffix not in media):
+            raise HTTPException(404, "Evidence not found")
+        candidate = (directory / relative).resolve()
+        if not candidate.is_relative_to(directory) or not candidate.is_file():
+            raise HTTPException(404, "Evidence not found")
+        record = await asyncio.to_thread(db.get_scan, scan_id)
+        if record is None and not await asyncio.to_thread(recorded_events, scan_id):
+            raise HTTPException(404, "Evidence not found")
+        return FileResponse(candidate, media_type=media[relative.suffix],
+                            headers={"X-Content-Type-Options": "nosniff"})
     disclosed = any(
         path in (event["payload"].get("path"), event["payload"].get("screenshot"))
         or any(cite.split(":")[0] == path for cite in event["payload"].get("evidence", []))
