@@ -51,6 +51,13 @@ def world(tmp_path, monkeypatch):
     return w
 
 
+def wait_for(cond, timeout=5):
+    deadline = time.monotonic() + timeout
+    while not cond():
+        assert time.monotonic() < deadline, "timed out"
+        time.sleep(0.01)
+
+
 def types(scan_id):
     return [e["type"] for e in db.events(scan_id)]
 
@@ -107,6 +114,16 @@ def test_investigator_failure_falls_back_to_rules(world, monkeypatch):
     assert "error" in types("s3")
 
 
+def test_plan_failure_does_not_stop_round1(world, monkeypatch):
+    def broken(scan_id, url):
+        raise KeyError("VULTR_INFERENCE_KEY")
+
+    monkeypatch.setattr(orchestrator.investigator, "plan", broken)
+    orchestrator.run_scan("s6", "http://kit.test/", "standard")
+    assert world["round1"] == ["robot", "victim"]
+    assert db.get_scan("s6")["status"] == "finished"
+
+
 def test_unknown_tool_is_rejected(world):
     orchestrator._context["s4"] = {"url": "http://x/", "decoy": {}, "n": 2}
     try:
@@ -119,6 +136,7 @@ def test_unknown_tool_is_rejected(world):
 
 def test_time_limit_kills_the_sandbox(world, monkeypatch, tmp_path):
     monkeypatch.setitem(sandbox.LIMITS, "seconds", 0.05)
+    monkeypatch.setattr(orchestrator, "TIME_LIMIT_GRACE", 0)
     monkeypatch.setattr(orchestrator.agent, "run_victim", lambda *a, **k: time.sleep(0.3))
     orchestrator.run_scan("s5", "http://kit.test/", "standard")
     hit = [e["payload"] for e in db.events("s5") if e["type"] == "resource_limit_hit"]
@@ -132,12 +150,10 @@ def test_scans_over_the_cap_queue(world, monkeypatch):
     monkeypatch.setattr(orchestrator.investigator, "plan", lambda scan_id, url: gate.wait(5))
     first = threading.Thread(target=orchestrator.run_scan, args=("q1", "http://kit.test/", "standard"))
     first.start()
-    while not db.events("q1"):
-        time.sleep(0.01)
+    wait_for(lambda: db.events("q1"))
     second = threading.Thread(target=orchestrator.run_scan, args=("q2", "http://kit.test/", "standard"))
     second.start()
-    while not db.events("q2"):
-        time.sleep(0.01)
+    wait_for(lambda: db.events("q2"))
     assert db.events("q2")[0]["type"] == "scan_queued"
     assert db.events("q2")[0]["payload"] == {"position": 1}
     gate.set()

@@ -17,6 +17,7 @@ from urllib.parse import urlsplit
 from app import agent, db, investigator, sandbox, verdict
 
 ROBOT_TIMEOUT = 60
+TIME_LIMIT_GRACE = 15
 ROUND1_REASON = {
     "robot": "I always start with a robot visit to see what a crawler is shown.",
     "victim": "I always send a victim visit to see what a person is shown and where a password goes.",
@@ -65,7 +66,9 @@ def _run_visit(scan_id: str, visit: str, profile: str, work: Callable[[str], Non
         except Exception as exc:
             _error(scan_id, f"start_visit:{visit}", exc)
             return
-        timer = threading.Timer(sandbox.LIMITS["seconds"], _time_limit, (scan_id, visit, container))
+        # Grace past the agent's own 120 s cap: it checks its deadline between steps, so a slow but
+        # normal visit must not be reported as a resource limit (signal M5).
+        timer = threading.Timer(sandbox.LIMITS["seconds"] + TIME_LIMIT_GRACE, _time_limit, (scan_id, visit, container))
         timer.daemon = True
         timer.start()
         try:
@@ -156,7 +159,10 @@ def run_scan(scan_id: str, url: str, mode: str = "standard") -> None:
         db.update_scan(scan_id, url=url, mode=mode, status="running")
         db.emit(scan_id, "scan_started", {"url": url, "mode": mode, "decoy_email": decoy["email"]})
 
-        investigator.plan(scan_id, url)
+        try:
+            investigator.plan(scan_id, url)
+        except Exception as exc:  # round 1 is fixed and does not need the plan
+            _error(scan_id, "plan", exc)
         for visit in ("robot", "victim"):
             _announce(scan_id, visit, visit, visit, ROUND1_REASON[visit])
         with ThreadPoolExecutor(max_workers=2) as pool:
@@ -181,3 +187,13 @@ def run_scan(scan_id: str, url: str, mode: str = "standard") -> None:
     finally:
         _context.pop(scan_id, None)
         scans.release()
+
+
+if __name__ == "__main__":  # python -m app.orchestrator <url>: one real scan without the web app
+    import sys
+    import uuid
+
+    sid = f"cli-{uuid.uuid4().hex[:8]}"
+    run_scan(sid, sys.argv[1], sys.argv[2] if len(sys.argv) > 2 else "standard")
+    for event in db.events(sid):
+        print(event["type"], json.dumps(event["payload"])[:200])
