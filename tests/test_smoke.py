@@ -25,6 +25,8 @@ INTERFACES = {
     "app.investigator": ["plan", "next_step"],
     "app.verdict": ["decide"],
     "app.orchestrator": ["run_scan", "dispatch"],
+    "app.stats": ["watch", "totals"],
+    "app.report": ["write_manifest", "verify"],
 }
 
 

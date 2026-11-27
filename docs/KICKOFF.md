@@ -116,6 +116,7 @@ Stop when a fake scan plays end to end in the browser; show a screenshot.
 
 ## 8. Second Prompts (after the first stop)
 
+- **All lanes:** SPEC 11A showcase features for your lane (owners in CLAUDE.md section 6), after your core acceptance tests pass.
 - **Lane A:** orchestrator (round 1 in parallel, `dispatch` for investigator tools, profiles incl. `victim_mobile`, cleanup in finally), caps and rate limit (SPEC 10), Object Storage, Caddyfile and systemd units, deploy to the VM. Target: public URL by 15:00 (A7, A8, A12, A14).
 - **Lane B:** investigator (SPEC 6A), claim checks (SPEC 8.4), vision brand check (8.3), `/api/scoreboard` job (A9); tune prompts until A2 and A11 pass 3 of 3 (A13 as a unit test).
 - **Lane C:** investigation board, containment panel, swap the fake scan for `orchestrator.run_scan`, scoreboard page, three demo presets, polish, README, architecture diagram, video.
