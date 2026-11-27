@@ -28,7 +28,8 @@ const counterIds = ["created", "destroyed", "requests", "blocked-count", "limits
 const hypothesisRows = new Map();
 const sandboxRows = new Map();
 const stepReasons = new Map();
-const passwordHosts = new Set();
+const observedHosts = new Map();
+const thirdPartyHosts = new Set();
 let scanId;
 let source;
 let lastEvent = 0;
@@ -227,7 +228,7 @@ function summarizeChecks(payload) {
   const destinations = payload.password_sent_to;
   if (destinations?.length && payload.reasons.some((reason) => reason.signal === "S1")) {
     setCheck("password", `Third-party destination: ${destinations.join(", ")}`, "flagged");
-  } else if (passwordHosts.size) {
+  } else if ([...observedHosts.values()].some((fields) => fields.has("password"))) {
     setCheck("password", "Password observed. No third-party destination cited.", "finished");
   } else {
     setCheck("password", "No password submission observed", "finished");
@@ -237,12 +238,47 @@ function summarizeChecks(payload) {
   }
 }
 
+function renderTrail() {
+  const list = byId("trail");
+  list.replaceChildren();
+  for (const host of thirdPartyHosts) {
+    if (!observedHosts.has(host)) observedHosts.set(host, new Set(["password"]));
+  }
+  for (const [host, fields] of observedHosts) {
+    const label = element("strong", host);
+    if (thirdPartyHosts.has(host)) label.dataset.tone = "risk";
+    const detail = thirdPartyHosts.has(host) ? "Third-party password destination" :
+      fields.has("password") ? "Password observed" : "Email observed";
+    appendRow("trail", label, element("p", detail, "subtle"));
+  }
+  byId("trail-empty").hidden = observedHosts.size > 0;
+  list.hidden = observedHosts.size === 0;
+}
+
+function renderEmailTriage({ links, flags }) {
+  const section = byId("email-triage");
+  section.hidden = false;
+  for (const id of ["email-links", "email-flags"]) byId(id).replaceChildren();
+  byId("email-triage-summary").textContent = links.length
+    ? `${links.length} ${links.length === 1 ? "link" : "links"} found`
+    : "No web links found.";
+  for (const link of links) {
+    const row = appendRow("email-links", element("strong", link.url));
+    if (link.shown_text && link.shown_text !== link.url) row.append(element("p", link.shown_text, "subtle"));
+    if (link.picked) row.append(element("p", link.reason || "Selected for investigation", "subtle"));
+  }
+  for (const flag of flags) appendRow("email-flags", element("p", flag.detail, "subtle"));
+  byId("email-links").hidden = links.length === 0;
+  byId("email-flags").hidden = flags.length === 0;
+}
+
 const render = {
   scan_started(event, p) {
     byId("email").textContent = p.decoy_email;
     byId("password").textContent = "••••••••••••••••";
     activity(event, "Scan started", p.url);
   },
+  email_triage(event, p) { renderEmailTriage(p); },
   scan_queued(event, p) {
     status(`Queued · position ${p.position}`, "running");
     activity(event, "Scan queued");
@@ -270,6 +306,11 @@ const render = {
     entry.detail.textContent = p.reason;
     entry.row.querySelectorAll("a").forEach((link) => link.remove());
     entry.row.append(...citeLinks(p.evidence));
+    if (p.id === "H4" && p.status === "refuted") {
+      entry.row.dataset.hypothesis = "refuted-legitimate";
+      byId("legitimate-check").hidden = false;
+      activity(event, "Legitimate login ruled out", p.reason);
+    }
   },
   dispatch(event, p) {
     setVisitState(p.visit, "Dispatched", "running");
@@ -319,12 +360,13 @@ const render = {
   request_seen() { increment("requests"); },
   probe_seen() { increment("probes"); },
   decoy_sent(event, p) {
-    if (p.field !== "password" || passwordHosts.has(p.host)) return;
-    passwordHosts.add(p.host);
-    setCheck("password", `Decoy password observed at ${p.host}`, "observed");
-    byId("trail-empty").hidden = true;
-    appendRow("trail", element("strong", p.host));
-    activity(event, "Decoy password observed", p.host);
+    if (!observedHosts.has(p.host)) observedHosts.set(p.host, new Set());
+    const fields = observedHosts.get(p.host);
+    if (fields.has(p.field)) return;
+    fields.add(p.field);
+    if (p.field === "password") setCheck("password", `Decoy password observed at ${p.host}`, "observed");
+    renderTrail();
+    activity(event, `Decoy ${p.field} observed`, p.host);
   },
   request_blocked(event, p) {
     increment("blocked-count");
@@ -374,13 +416,16 @@ const render = {
   },
   verdict(event, p) {
     summarizeChecks(p);
+    thirdPartyHosts.clear();
+    for (const host of p.password_sent_to) thirdPartyHosts.add(host);
+    renderTrail();
     const stamp = byId("verdict");
     const label = p.verdict === "Scam" ? "Phishing" : p.verdict;
     stamp.textContent = label;
     activeResult = label;
     stamp.dataset.tone = { Phishing: "risk", Suspicious: "warn", "No evidence found": "good" }[label];
     for (const reason of p.reasons) {
-      appendRow("reasons", element("strong", `${reason.signal} · ${reason.text}`), ...citeLinks(reason.evidence));
+      appendRow("reasons", element("strong", `${reason.signal} · ${reason.signal === "S3" ? "Context · " : ""}${reason.text}`), ...citeLinks(reason.evidence));
     }
     if (p.untested.length) {
       byId("untested").hidden = false;
@@ -393,7 +438,14 @@ const render = {
     stop("Investigation complete", "complete");
   },
   decision(event, p) { recordDecision(p); },
-  error(event, p) { stop(`${p.where}: ${p.message}`, "error"); },
+  error(event, p) {
+    if (p.where === "investigator" && p.message.includes("Planner unavailable, rules only")) {
+      byId("planner-fallback").hidden = false;
+      activity(event, "Planner unavailable, rules only");
+      return;
+    }
+    stop(`${p.where}: ${p.message}`, "error");
+  },
 };
 
 function stop(message, state) {
@@ -423,7 +475,7 @@ function reset() {
   activeResult = undefined;
   document.querySelector(".workspace").replaceWith(initialWorkspace.cloneNode(true));
   for (const id of counterIds) byId(id).textContent = "0";
-  for (const cache of [hypothesisRows, sandboxRows, stepReasons, passwordHosts]) cache.clear();
+  for (const cache of [hypothesisRows, sandboxRows, stepReasons, observedHosts, thirdPartyHosts]) cache.clear();
   lastEvent = 0;
   scanId = undefined;
   byId("case-id").textContent = "";
@@ -517,3 +569,21 @@ fetch("/api/health")
     if (!demo && !scanId && !startButton.disabled) status("Simulated scans are disabled", "error");
   })
   .catch(() => status("Could not check service status", "error"));
+
+byId("email-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const button = byId("email-preview-button");
+  const message = byId("email-preview-status");
+  button.disabled = true;
+  message.textContent = "Checking email…";
+  try {
+    const result = await post("/api/email-preview", { email_text: byId("email-text").value });
+    renderEmailTriage(result);
+    byId("email-triage").scrollIntoView({ block: "nearest" });
+    message.textContent = "Email preview ready. No links were opened.";
+  } catch (error) {
+    message.textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+});

@@ -227,3 +227,20 @@ button[aria-pressed="true"] { color: var(--accent); border-color: var(--accent);
 .detection-list li[data-state="flagged"] span { color: inherit; }
 @media (max-width: 35rem) { .detection-list { grid-template-columns: minmax(0, 1fr); } }
 @media (prefers-reduced-motion: reduce) { .browser-state[data-state="running"]::before { animation: none; } }
+
+.email-input { margin-top: .75rem; }
+.email-input summary { cursor: pointer; width: fit-content; padding-block: .45rem; }
+.email-input form { display: grid; gap: .5rem; justify-items: start; }
+.email-input textarea {
+  width: min(100%, 52rem); resize: vertical; font: inherit; color: inherit;
+  background: var(--surface); border: 1px solid currentColor; border-radius: .5rem; padding: .65rem;
+}
+.email-triage { margin-top: .75rem; }
+#legitimate-check, [data-hypothesis="refuted-legitimate"] .row-title span {
+  color: var(--risk); font-weight: 650;
+}
+
+#email-text { accent-color: var(--accent); }
+.email-triage { border-bottom: 1px solid var(--rule); padding-top: .65rem; }
+.email-triage h2 { font-size: 1rem; }
+.email-input[open] { max-height: min(40dvh, 17rem); overflow-y: auto; }

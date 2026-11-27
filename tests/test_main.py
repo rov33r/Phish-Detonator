@@ -82,3 +82,23 @@ def test_reconnect_evidence_and_override(client):
 def test_invalid_scan_and_unknown_id(client):
     assert client.post("/api/scans", json={"url": "file:///tmp/example"}).status_code == 422
     assert client.get("/api/scans/missing/events").status_code == 404
+
+
+def test_email_preview_extracts_without_starting_a_scan(client):
+    response = client.post("/api/email-preview", json={
+        "email_text": '<a href="https://destination.example/account">sender.example</a>',
+    })
+    assert response.status_code == 200
+    preview = response.json()
+    assert preview["links"] == [{
+        "url": "https://destination.example/account", "shown_text": "sender.example",
+    }]
+    assert [flag["name"] for flag in preview["flags"]] == ["link_text_mismatch"]
+    assert client.app.state.scans == {}
+
+
+def test_legitimate_submission_is_not_a_third_party_destination(client):
+    scan = client.post("/api/scans", json={"url": PRESETS["legit"]}).json()
+    events = read_events(client.get(f"/api/scans/{scan['scan_id']}/events"))
+    assert any(event["type"] == "decoy_sent" for event in events)
+    assert events[-1]["payload"]["password_sent_to"] == []

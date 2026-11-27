@@ -13,7 +13,9 @@ from uuid import uuid4
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, HttpUrl
+from pydantic import BaseModel, Field, HttpUrl
+
+from app.email_intake import extract_links, flags
 
 ROOT = Path(__file__).resolve().parent
 PRESETS = {
@@ -148,7 +150,8 @@ def demo_events(url, mode):
             "checks": [{"name": "Synthetic values only", "ok": True}],
             "decision": "auto_approved", "reason": "The simulated submission uses only decoy placeholders.",
         }
-        trail.append(host)
+        if scam:
+            trail.append(host)
         receipt = f"{victim}/network.txt"
         yield "request_seen", {"visit": victim, "method": "POST", "host": host, "url": f"https://{host}/submit"}
         yield "decoy_sent", {"host": host, "url": f"https://{host}/submit", "field": "password", "encoding": "plain"}
@@ -233,6 +236,19 @@ app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 class ScanInput(BaseModel):
     url: HttpUrl
     mode: Literal["standard", "high_risk"] = "standard"
+
+
+class EmailPreviewInput(BaseModel):
+    email_text: str = Field(min_length=1, max_length=50_000)
+
+
+@app.post("/api/email-preview")
+async def email_preview(body: EmailPreviewInput):
+    try:
+        links = extract_links(body.email_text)
+        return {"links": links, "flags": flags(body.email_text, links)}
+    except ValueError as error:
+        raise HTTPException(422, "The email could not be parsed") from error
 
 
 class DecisionInput(BaseModel):
