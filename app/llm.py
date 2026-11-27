@@ -20,6 +20,7 @@ BASE_URL = "https://api.vultrinference.com/v1"
 MAX_ATTEMPTS = 3
 BACKOFF_S = (1.0, 2.0, 4.0)
 MAX_RETRY_AFTER_S = 10.0
+TIMEOUT_S = 15.0  # per request (normal: 1 to 7 s); a stalled model is skipped, not waited for (spikes of 40 to 120 s seen)
 
 Validator = Callable[[dict], None]  # raises ValueError with a short message on a miss
 
@@ -63,11 +64,12 @@ def chat_json(
     max_tokens: int = 1024,
     validate: Validator | None = None,
     model: str | None = None,
+    timeout: float = TIMEOUT_S,
 ) -> Reply:
     """One JSON answer from the first model that works. `effort`: low for agent steps,
-    medium for the investigator (SPEC 6.5)."""
+    medium for the investigator (SPEC 6.5). A request that times out moves to the next model."""
     models = _dedupe([model, os.environ.get("PD_MODEL"), os.environ.get("PD_MODEL_FALLBACK")])
-    return _first_working(models, messages, schema, name, effort, max_tokens, validate)
+    return _first_working(models, messages, schema, name, effort, max_tokens, validate, timeout)
 
 
 def vision_json(
@@ -86,7 +88,7 @@ def vision_json(
         content = [{"type": "text", "text": prompt}, {"type": "image_url", "image_url": {"url": image}}]
         try:
             return _first_working([vision_model], [{"role": "user", "content": content}],
-                                  schema, name, "low", 512, validate)
+                                  schema, name, "low", 512, validate, 30.0)
         except LLMError:
             pass
     return chat_json([{"role": "user", "content": prompt}], schema, name=name,
@@ -114,19 +116,19 @@ def parse_json(content: str) -> dict:
     return data
 
 
-def _first_working(models, messages, schema, name, effort, max_tokens, validate) -> Reply:
+def _first_working(models, messages, schema, name, effort, max_tokens, validate, timeout=TIMEOUT_S) -> Reply:
     if not models:
         raise LLMError("no model configured (set PD_MODEL)")
     for model in models:
         try:
-            return _answer(model, messages, schema, name, effort, max_tokens, validate)
+            return _answer(model, messages, schema, name, effort, max_tokens, validate, timeout)
         except _Unavailable:
             continue
     raise LLMError(f"no model answered: {', '.join(models)}")
 
 
-def _answer(model, messages, schema, name, effort, max_tokens, validate) -> Reply:
-    content = _complete(model, messages, schema, name, effort, max_tokens)
+def _answer(model, messages, schema, name, effort, max_tokens, validate, timeout=TIMEOUT_S) -> Reply:
+    content = _complete(model, messages, schema, name, effort, max_tokens, timeout)
     try:
         return Reply(_checked(content, validate), model)
     except ValueError as e:
@@ -135,7 +137,7 @@ def _answer(model, messages, schema, name, effort, max_tokens, validate) -> Repl
             {"role": "user", "content": f"That answer was invalid: {e}. "
                                         "Answer with one JSON object only, matching the schema."},
         ]
-    content = _complete(model, repair, schema, name, effort, max_tokens)
+    content = _complete(model, repair, schema, name, effort, max_tokens, timeout)
     try:
         return Reply(_checked(content, validate), model)
     except ValueError as e:
@@ -149,11 +151,12 @@ def _checked(content: str, validate: Validator | None) -> dict:
     return data
 
 
-def _complete(model, messages, schema, name, effort, max_tokens) -> str:
+def _complete(model, messages, schema, name, effort, max_tokens, timeout=TIMEOUT_S) -> str:
     plain = False  # after a 400: json_object and no reasoning setting
     attempt = 0
     while attempt < MAX_ATTEMPTS:
-        kwargs: dict[str, Any] = {"model": model, "messages": messages, "max_completion_tokens": max_tokens}
+        kwargs: dict[str, Any] = {"model": model, "messages": messages, "max_completion_tokens": max_tokens,
+                                  "timeout": timeout}
         if plain:
             kwargs["response_format"] = {"type": "json_object"}
         else:
@@ -175,7 +178,9 @@ def _complete(model, messages, schema, name, effort, max_tokens) -> str:
             raise LLMError("inference key rejected (401)") from None
         except openai.RateLimitError as e:
             _sleep(_retry_after(e))
-        except (openai.APITimeoutError, openai.APIConnectionError, openai.InternalServerError):
+        except openai.APITimeoutError:
+            raise _Unavailable from None  # stalled: the fallback model answers in about 2 s
+        except (openai.APIConnectionError, openai.InternalServerError):
             _sleep(BACKOFF_S[min(attempt, len(BACKOFF_S) - 1)])
         except (openai.NotFoundError, openai.PermissionDeniedError):
             raise _Unavailable from None
