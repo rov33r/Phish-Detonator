@@ -188,6 +188,7 @@ class Analysis:
     login_host: str | None = None
     brand: str | None = None
     blocked: list[dict] = field(default_factory=list)
+    limit_hit: bool = False
 
     def add(self, signal: str, cite: str, reason: str) -> None:
         if signal not in self.signals:
@@ -318,7 +319,10 @@ def analyze(visits: dict[str, Visit], decoy: dict, brands: dict) -> Analysis:
         if v.crash:
             an.add("M5", f"{v.name}/crash.jsonl:{v.crash[0][0]}", "The page crashed the browser.")
         if v.resource_limit:
-            an.add("M5", f"{v.name}/resource_limit.json", "The page hit the sandbox's resource limit.")
+            kind = v.resource_limit.get("kind", "resource")
+            an.add("M5", f"{v.name}/resource_limit.json",
+                   f"The page exhausted the sandbox's {kind} limit and the box was killed; the host was not affected.")
+            an.limit_hit = True
     return an
 
 
@@ -468,7 +472,9 @@ def decide(scan_id: str, claims: list[dict] | None = None, *, action: str = "blo
         _emit(scan_id, "claim_rejected", r)
 
     verdict = verdict_of(an.signals)
-    if not any(v.robot or v.agent for v in visits.values()):
+    if an.limit_hit and verdict == "No evidence found":
+        verdict = "Suspicious"  # legitimate pages do not exhaust a 2 GB browser sandbox
+    if not any(v.robot or v.agent or v.resource_limit for v in visits.values()):
         # every sandbox failed: "No evidence found" would read as "looked clean"
         verdict = "Inconclusive"
         an.reasons["ERR"] = "No sandbox visit produced evidence, so I cannot judge this link. See the errors above."
