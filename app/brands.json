@@ -1,0 +1,24 @@
+{
+  "_comment": "Brand -> login hosts it owns (exact host or *.suffix). <IP> is PD_PUBLIC_IP_DASHED. Keys starting with _ are not brands. SPEC 8.3, 8.5.",
+  "Vexalo": ["vexalo.<IP>.sslip.io"],
+  "Microsoft": ["login.microsoftonline.com", "login.live.com", "account.microsoft.com"],
+  "Google": ["accounts.google.com"],
+  "Apple": ["appleid.apple.com", "idmsa.apple.com"],
+  "GitHub": ["github.com"],
+  "PayPal": ["www.paypal.com"],
+  "_login_providers": [
+    "login.microsoftonline.com",
+    "login.live.com",
+    "*.b2clogin.com",
+    "accounts.google.com",
+    "appleid.apple.com",
+    "*.okta.com",
+    "*.oktapreview.com",
+    "*.auth0.com",
+    "*.onelogin.com",
+    "*.amazoncognito.com",
+    "*.duosecurity.com",
+    "*.pingone.com",
+    "*.pingidentity.com"
+  ]
+}
