@@ -1,4 +1,23 @@
 const byId = (id) => document.getElementById(id);
+const themeToggle = byId("theme-toggle");
+const themeRoot = document.documentElement;
+
+function syncThemeControl() {
+  themeToggle.textContent = themeRoot.dataset.theme === "dark" ? "Light mode" : "Dark mode";
+}
+
+themeToggle.addEventListener("click", () => {
+  const theme = themeRoot.dataset.theme === "dark" ? "light" : "dark";
+  themeRoot.dataset.theme = theme;
+  syncThemeControl();
+  try {
+    localStorage.setItem("phishdet-theme", theme);
+  } catch {
+    // The theme still works when browser storage is disabled.
+  }
+});
+syncThemeControl();
+
 const form = byId("scan-form");
 const urlInput = byId("url");
 const startButton = byId("scan-button");
@@ -14,6 +33,7 @@ let scanId;
 let source;
 let lastEvent = 0;
 let startTime;
+let activeResult;
 
 function status(text, state) {
   byId("status").textContent = text;
@@ -56,15 +76,106 @@ function citeLinks(cites) {
   });
 }
 
-function capture(id, path, description) {
-  const image = element("img", "");
-  image.alt = description;
-  image.src = evidenceUrl(path);
-  image.addEventListener("error", () => {
-    if (image.isConnected) image.replaceWith(element("span", "Capture unavailable"));
+const captureVisits = ["robot", "victim"];
+const stages = [...document.querySelectorAll("[data-phase]")];
+
+function setPhase(phase) {
+  const current = stages.findIndex((stage) => stage.dataset.phase === phase);
+  stages.forEach((stage, index) => {
+    stage.dataset.complete = String(phase === "complete" || (current >= 0 && index < current));
+    if (index === current) stage.setAttribute("aria-current", "step");
+    else stage.removeAttribute("aria-current");
   });
-  byId(id).replaceChildren(image);
 }
+
+function showCapturePlaceholder(visit, message, loading) {
+  const placeholder = byId(`pending-${visit}`);
+  placeholder.hidden = false;
+  placeholder.querySelector(".capture-skeleton").hidden = !loading;
+  byId(`pending-${visit}-message`).textContent = message;
+  byId(`compare-${visit}`).hidden = true;
+}
+
+function updateComparisonState() {
+  const pending = captureVisits.some((visit) => ["true", "image"].includes(byId(`pending-${visit}`).dataset.loading));
+  const available = captureVisits.filter((visit) => !byId(`compare-${visit}`).hidden).length;
+  byId("compare-stage").setAttribute("aria-busy", String(pending));
+  byId("comparison-state").textContent = pending ? "Gathering captures" :
+    available === 2 ? "Scan captures" : available === 1 ? "One capture available" : "No captures available";
+}
+
+function capture(visit, path, description) {
+  const image = byId(`compare-${visit}`);
+  const placeholder = byId(`pending-${visit}`);
+  placeholder.dataset.loading = "image";
+  showCapturePlaceholder(visit, "Loading capture", true);
+  updateComparisonState();
+  image.alt = description;
+  image.onload = () => {
+    if (!image.isConnected) return;
+    placeholder.dataset.loading = "false";
+    placeholder.hidden = true;
+    image.hidden = false;
+    updateComparisonState();
+  };
+  image.onerror = () => {
+    if (!image.isConnected) return;
+    placeholder.dataset.loading = "false";
+    showCapturePlaceholder(visit, "Capture unavailable", false);
+    updateComparisonState();
+  };
+  const url = evidenceUrl(path);
+  if (image.getAttribute("src") === url && image.complete && image.naturalWidth > 0) {
+    image.onload();
+  } else {
+    image.src = url;
+  }
+}
+
+function setTextLoading(section, loading) {
+  byId(`${section}-skeleton`).hidden = !loading;
+  byId(section).hidden = loading;
+  byId(section).parentElement.setAttribute("aria-busy", String(loading));
+}
+
+function startLoading() {
+  setPhase("plan");
+  setTextLoading("plan", true);
+  setTextLoading("verdict", true);
+  for (const visit of captureVisits) {
+    byId(`pending-${visit}`).dataset.loading = "true";
+    showCapturePlaceholder(visit, visit === "robot" ? "Waiting for scanner capture" : "Waiting for victim capture", true);
+  }
+  updateComparisonState();
+}
+
+function finishLoading(state) {
+  setPhase(state === "complete" ? "complete" : "");
+  setTextLoading("plan", false);
+  setTextLoading("verdict", false);
+  for (const visit of captureVisits) {
+    const placeholder = byId(`pending-${visit}`);
+    const loading = placeholder.dataset.loading;
+    if (loading === "false" || (loading === "image" && state === "complete")) continue;
+    if (loading === "image") {
+      const image = byId(`compare-${visit}`);
+      image.onload = null;
+      image.onerror = null;
+    }
+    showCapturePlaceholder(visit, state === "complete" ? "No capture recorded" : "Scan stopped", false);
+    placeholder.dataset.loading = "false";
+  }
+  updateComparisonState();
+}
+
+document.addEventListener("click", (event) => {
+  const control = event.target.closest("[data-view][type=button]");
+  if (!control) return;
+  byId("compare-stage").dataset.view = control.dataset.view;
+  for (const button of control.parentElement.querySelectorAll("button")) {
+    button.setAttribute("aria-pressed", String(button === control));
+  }
+});
 
 function activity(event, title, detail = "") {
   const seconds = Math.max(0, Math.round((Date.parse(event.ts) - startTime) / 1000));
@@ -88,6 +199,44 @@ function sandboxRow(visit) {
   return sandboxRows.get(visit);
 }
 
+function setVisitState(visit, text, state) {
+  const family = visit?.startsWith("robot") ? "scanner" : visit?.startsWith("victim") ? "victim" : null;
+  if (!family) return;
+  const badge = byId(`${family}-state`);
+  if (state === "finished" && badge.dataset.visit && badge.dataset.visit !== visit) return;
+  badge.dataset.visit = visit;
+  badge.dataset.state = state;
+  badge.textContent = text;
+}
+
+function setCheck(name, text, state) {
+  const check = byId(`check-${name}`);
+  if (check.dataset.state === state && check.querySelector("span").textContent === text) return;
+  check.dataset.state = state;
+  check.querySelector("span").textContent = text;
+  if (!matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    check.animate([{ opacity: .6, transform: "translateY(2px)" }, { opacity: 1, transform: "translateY(0)" }],
+                  { duration: 230, easing: "ease-out" });
+  }
+}
+
+function summarizeChecks(payload) {
+  const mismatch = payload.reasons.some((reason) => reason.signal === "S2");
+  setCheck("cloak", mismatch ? "Scanner and victim saw different pages" : "No page mismatch cited",
+           mismatch ? "flagged" : "finished");
+  const destinations = payload.password_sent_to;
+  if (destinations?.length && payload.reasons.some((reason) => reason.signal === "S1")) {
+    setCheck("password", `Third-party destination: ${destinations.join(", ")}`, "flagged");
+  } else if (passwordHosts.size) {
+    setCheck("password", "Password observed. No third-party destination cited.", "finished");
+  } else {
+    setCheck("password", "No password submission observed", "finished");
+  }
+  if (byId("check-containment").dataset.state === "waiting") {
+    setCheck("containment", "No blocked activity observed", "finished");
+  }
+}
+
 const render = {
   scan_started(event, p) {
     byId("email").textContent = p.decoy_email;
@@ -99,6 +248,8 @@ const render = {
     activity(event, "Scan queued");
   },
   plan(event, p) {
+    setTextLoading("plan", false);
+    setPhase("captures");
     byId("plan").textContent = p.text;
     for (const item of p.hypotheses) {
       const title = element("div", "", "row-title");
@@ -110,6 +261,9 @@ const render = {
     }
   },
   hypothesis_update(event, p) {
+    if (p.id === "H1" && p.status === "supported") {
+      setCheck("cloak", "Page mismatch reported. Checking the evidence.", "observed");
+    }
     const entry = hypothesisRows.get(p.id);
     if (!entry) return;
     entry.state.textContent = p.status[0].toUpperCase() + p.status.slice(1);
@@ -118,24 +272,31 @@ const render = {
     entry.row.append(...citeLinks(p.evidence));
   },
   dispatch(event, p) {
-    activity(event, `Round ${p.round} · Dispatch ${p.visit}`, p.reason);
+    setVisitState(p.visit, "Dispatched", "running");
+    const round = p.round ? `Round ${p.round} · ` : "";
+    activity(event, `${round}Dispatch ${p.visit}`, p.reason);
   },
   sandbox_created(event, p) {
+    setPhase("captures");
     increment("created");
+    setVisitState(p.visit, "Browser started", "running");
     activity(event, `Sandbox created · ${p.visit}`, `${p.runtime} · ${p.limits.memory} MB memory cap`);
   },
   robot_done(event, p) {
-    capture("robot-capture", p.screenshot, `Scanner capture showing ${p.title}`);
+    setVisitState(p.visit ?? "robot", "Captured", "running");
+    capture("robot", p.screenshot, `Scanner capture showing ${p.title}`);
     byId("robot-url").textContent = p.final_url;
     activity(event, "Scanner capture received", p.title);
   },
   agent_step(event, p) {
+    setVisitState(p.visit, `Step ${p.step}`, "running");
     stepReasons.set(`${p.visit}:${p.step}`, p.reason);
     byId("agent-step").textContent = p.reason;
     activity(event, `${p.visit} · Step ${p.step} · ${p.action}`, `${p.reason} · ${p.model}`);
   },
   approval(event, p) {
     const outcome = p.decision === "auto_approved" ? "Auto-approved" : "Denied";
+    setVisitState(p.visit, outcome, "running");
     activity(event, `${p.visit} · Step ${p.step} · ${outcome}`, p.reason);
   },
   screenshot(event, p) {
@@ -146,7 +307,7 @@ const render = {
       for (const button of frames.children) button.setAttribute("aria-pressed", "false");
       frame.setAttribute("aria-pressed", "true");
       byId("agent-step").textContent = caption;
-      capture("victim-capture", p.path, `Victim capture from ${label}`);
+      capture("victim", p.path, `Victim capture from ${label}`);
     };
     const frame = element("button", label);
     frame.type = "button";
@@ -160,12 +321,15 @@ const render = {
   decoy_sent(event, p) {
     if (p.field !== "password" || passwordHosts.has(p.host)) return;
     passwordHosts.add(p.host);
+    setCheck("password", `Decoy password observed at ${p.host}`, "observed");
     byId("trail-empty").hidden = true;
     appendRow("trail", element("strong", p.host));
     activity(event, "Decoy password observed", p.host);
   },
   request_blocked(event, p) {
     increment("blocked-count");
+    const total = Number(byId("blocked-count").textContent);
+    setCheck("containment", `${total} blocked ${total === 1 ? "request" : "requests"}`, "flagged");
     byId("blocked-empty").hidden = true;
     const title = element("div", "", "row-title");
     const state = element("strong", "Blocked");
@@ -190,12 +354,15 @@ const render = {
   },
   resource_limit_hit(event, p) {
     increment("limits");
+    setCheck("containment", `Sandbox hit its ${p.kind} limit`, "flagged");
     byId("blocked-empty").hidden = true;
     appendRow("blocked", element("strong", `${p.visit} · ${p.kind} limit reached`));
     activity(event, "Resource limit reached", `${p.peak_mb} / ${p.limit_mb} MB`);
   },
   sandbox_destroyed(event, p) {
     increment("destroyed");
+    setVisitState(p.visit, "Sandbox closed", "finished");
+    if (byId("destroyed").textContent === byId("created").textContent) setPhase("verdict");
     sandboxRow(p.visit).replaceChildren(
       element("strong", `${p.visit} · Destroyed`),
       element("p", `${p.lifetime_s}s lifetime · ${p.peak_mem_mb} MB peak`, "subtle"),
@@ -206,9 +373,12 @@ const render = {
     appendRow("rejected", element("s", p.claim), element("p", p.reason, "subtle"));
   },
   verdict(event, p) {
+    summarizeChecks(p);
     const stamp = byId("verdict");
-    stamp.textContent = p.verdict;
-    stamp.dataset.tone = { Scam: "risk", Suspicious: "warn", "No evidence found": "good" }[p.verdict];
+    const label = p.verdict === "Scam" ? "Phishing" : p.verdict;
+    stamp.textContent = label;
+    activeResult = label;
+    stamp.dataset.tone = { Phishing: "risk", Suspicious: "warn", "No evidence found": "good" }[label];
     for (const reason of p.reasons) {
       appendRow("reasons", element("strong", `${reason.signal} · ${reason.text}`), ...citeLinks(reason.evidence));
     }
@@ -219,7 +389,7 @@ const render = {
     byId("decisions").hidden = false;
     if (p.action_taken === "blocked") recordDecision({ decision: "block", decided_by: p.decided_by });
     else byId("decision").textContent = "No automatic action taken.";
-    activity(event, "Verdict reached", p.verdict);
+    activity(event, "Verdict reached", label);
     stop("Investigation complete", "complete");
   },
   decision(event, p) { recordDecision(p); },
@@ -229,12 +399,28 @@ const render = {
 function stop(message, state) {
   source?.close();
   status(message, state);
+  finishLoading(state);
+  for (const family of ["scanner", "victim"]) {
+    const badge = byId(`${family}-state`);
+    if (badge.dataset.state === "running" || badge.dataset.state === "waiting") {
+      badge.dataset.state = "finished";
+      badge.textContent = state === "complete" ? "Visit ended" : "Scan stopped";
+    }
+  }
   startButton.disabled = false;
   startButton.textContent = "Start scan";
 }
 
 function reset() {
   source?.close();
+  if (activeResult) {
+    const previous = element("article", "", "previous-exchange");
+    const prompt = element("div", "", "prompt-message");
+    prompt.append(element("span", "You"), element("p", byId("submitted-url").textContent));
+    previous.append(prompt, element("p", activeResult, "previous-verdict"));
+    byId("conversation-history").append(previous);
+  }
+  activeResult = undefined;
   document.querySelector(".workspace").replaceWith(initialWorkspace.cloneNode(true));
   for (const id of counterIds) byId(id).textContent = "0";
   for (const cache of [hypothesisRows, sandboxRows, stepReasons, passwordHosts]) cache.clear();
@@ -272,9 +458,14 @@ form.addEventListener("submit", async (event) => {
   event.preventDefault();
   if (startButton.disabled) return;
   reset();
+  byId("welcome").hidden = true;
+  byId("active-exchange").hidden = false;
+  byId("submitted-url").textContent = urlInput.value;
+  byId("active-exchange").scrollIntoView({ block: "start" });
+  startLoading();
   startButton.disabled = true;
   startButton.textContent = "Scanning…";
-  status("Starting simulated investigation", "running");
+  status("Starting investigation", "running");
   try {
     const result = await post("/api/scans", Object.fromEntries(new FormData(form)));
     scanId = result.scan_id;
