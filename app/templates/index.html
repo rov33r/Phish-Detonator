@@ -55,19 +55,35 @@
             <code id="case-id"></code>
           </div>
           <ol class="scan-stages" aria-label="Scan progress">
-            <li data-phase="plan">Plan</li>
-            <li data-phase="captures">Compare browsers</li>
-            <li data-phase="verdict">Review findings</li>
+            <li data-phase="plan" data-target="investigation"><strong>Plan</strong><span class="stage-note"></span></li>
+            <li data-phase="captures" data-target="comparison"><strong>Two browsers</strong><span class="stage-note"></span></li>
+            <li data-phase="followups" data-target="rounds-stage"><strong>Agent follow-ups</strong><span class="stage-note"></span></li>
+            <li data-phase="approval" data-target="approval-stage"><strong>Your approval</strong><span class="stage-note"></span></li>
+            <li data-phase="verdict" data-target="verdict-panel"><strong>Verdict</strong><span class="stage-note"></span></li>
           </ol>
           <div class="workspace">
-            <section class="surface approval-stage" id="approval-stage" aria-labelledby="approval-heading" hidden>
-              <h2 id="approval-heading">Your approval</h2>
-              <div class="section-body">
-                <div id="approvals" aria-live="polite"></div>
-                <ul class="clean rows" id="approval-outcomes" aria-label="Approval outcomes" hidden></ul>
+            <details class="surface investigation disclosure stage-section" id="investigation" open>
+              <summary>Investigation details</summary>
+              <div class="section-body investigation-body">
+                <div>
+                  <h3>What the agent is checking</h3>
+                  <div class="text-skeleton" id="plan-skeleton" aria-hidden="true" hidden>
+                    <span class="skeleton-line"></span><span class="skeleton-line"></span>
+                  </div>
+                  <p id="planner-fallback" class="subtle" role="status" hidden>Planner unavailable, rules only</p>
+                  <p id="plan" class="subtle">The investigator’s plan and questions will appear here.</p>
+                  <ul class="clean rows" id="hypotheses" hidden></ul>
+                </div>
+                <div>
+                  <details class="timeline-toggle" id="timeline-toggle">
+                    <summary>Full activity timeline</summary>
+                    <p id="timeline-empty" class="subtle">Sandbox dispatches and agent steps appear as they happen.</p>
+                    <ol class="clean timeline" id="timeline" hidden></ol>
+                  </details>
+                </div>
               </div>
-            </section>
-            <section class="surface comparison live-investigation" aria-labelledby="comparison-heading">
+            </details>
+            <section class="surface comparison live-investigation stage-section" id="comparison" aria-labelledby="comparison-heading">
               <h2 id="comparison-heading">Browser comparison</h2>
               <div class="section-head comparison-head">
                 <div><p id="comparison-state">Sample captures</p></div>
@@ -127,8 +143,19 @@
                 </ul>
               </div>
             </section>
+            <section class="surface rounds-stage stage-section" id="rounds-stage" aria-labelledby="rounds-heading" hidden>
+              <h2 id="rounds-heading">Agent follow-ups</h2>
+              <ol class="clean rounds" id="rounds"></ol>
+            </section>
+            <section class="surface approval-stage stage-section" id="approval-stage" aria-labelledby="approval-heading" hidden>
+              <h2 id="approval-heading">Your approval</h2>
+              <div class="section-body">
+                <div id="approvals" aria-live="polite"></div>
+                <ul class="clean rows" id="approval-outcomes" aria-label="Approval outcomes" hidden></ul>
+              </div>
+            </section>
             <div class="evidence-column">
-              <aside class="surface verdict" aria-labelledby="verdict-heading">
+              <aside class="surface verdict stage-section" id="verdict-panel" aria-labelledby="verdict-heading">
                 <h2 class="visually-hidden" id="verdict-heading">Verdict</h2>
                 <div class="section-body">
                   <div class="text-skeleton" id="verdict-skeleton" aria-hidden="true" hidden>
@@ -168,29 +195,10 @@
                 </div>
               </details>
             </div>
-            <details class="surface investigation disclosure">
-              <summary>Investigation details</summary>
-              <div class="section-body investigation-body">
-                <div>
-                  <h3>Hypotheses</h3>
-                  <div class="text-skeleton" id="plan-skeleton" aria-hidden="true" hidden>
-                    <span class="skeleton-line"></span><span class="skeleton-line"></span>
-                  </div>
-                  <p id="planner-fallback" class="subtle" role="status" hidden>Planner unavailable, rules only</p>
-                  <p id="plan" class="subtle">The investigator’s plan and hypotheses will appear here.</p>
-                  <ul class="clean rows" id="hypotheses" hidden></ul>
-                </div>
-                <div>
-                  <h3>Activity timeline</h3>
-                  <p id="timeline-empty" class="subtle">Sandbox dispatches and agent steps appear as they happen.</p>
-                  <ol class="clean timeline" id="timeline" hidden></ol>
-                </div>
-              </div>
-            </details>
           </div>
           <footer class="counts" aria-label="Current scan counters">
             <span><b id="created">0</b> Created</span><span><b id="destroyed">0</b> Destroyed</span>
-            <span><b id="requests">0</b> Requests</span><span><b id="blocked-count">0</b> Blocked</span>
+            <span><b id="blocked-count">0</b> Blocked</span>
             <span><b id="limits">0</b> Limits hit</span><span><b id="probes">0</b> Bot probes</span>
           </footer>
         </div>
@@ -201,9 +209,6 @@
       <form id="scan-form" class="scan-form">
         <label class="url-field">URL to investigate
           <input inputmode="url" autocapitalize="off" spellcheck="false" type="url" name="url" id="url" placeholder="https://example.com/link" required autocomplete="off">
-        </label>
-        <label>Scan mode
-          <select name="mode" id="mode"><option value="standard">Standard</option><option value="high_risk">High risk</option></select>
         </label>
         <button class="primary" id="scan-button">Start scan</button>
       </form>

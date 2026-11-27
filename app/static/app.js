@@ -24,8 +24,14 @@ const startButton = byId("scan-button");
 const presets = [...document.querySelectorAll("[data-url]")];
 const workspace = document.querySelector(".workspace");
 const initialWorkspace = workspace.cloneNode(true);
-const counterIds = ["created", "destroyed", "requests", "blocked-count", "limits", "probes"];
+const counterIds = ["created", "destroyed", "blocked-count", "limits", "probes"];
 const hypothesisRows = new Map();
+const blockedRows = new Map();
+const roundCards = new Map();
+const visitedStages = new Set();
+const hypothesisChips = {
+  open: "Checking", supported: "Confirmed", refuted: "Ruled out", untested: "Not tested",
+};
 const sandboxRows = new Map();
 const stepReasons = new Map();
 const observedHosts = new Map();
@@ -45,6 +51,8 @@ let startTime;
 let activeResult;
 let playback = false;
 let captureOnly = false;
+let liveService = false;
+let limitHit = false;
 
 function status(text, state) {
   byId("status").textContent = text;
@@ -90,13 +98,31 @@ function citeLinks(cites) {
 const captureVisits = ["robot", "victim"];
 const stages = [...document.querySelectorAll("[data-phase]")];
 
+function stageNote(phase, text) {
+  const stage = stages.find((item) => item.dataset.phase === phase);
+  if (stage) stage.querySelector(".stage-note").textContent = text;
+}
+
+// Stages can repeat (a follow-up after an approval), so completion tracks visits, not position.
 function setPhase(phase) {
-  const current = stages.findIndex((stage) => stage.dataset.phase === phase);
+  const current = stages.find((stage) => stage.dataset.phase === phase);
+  const previous = stages.find((stage) => stage.hasAttribute("aria-current"));
+  if (current) visitedStages.add(phase);
+  const end = phase === "complete" || phase === "verdict";
+  const reached = current ? stages.indexOf(current) : end ? stages.length : -1;
   stages.forEach((stage, index) => {
-    stage.dataset.complete = String(phase === "complete" || (current >= 0 && index < current));
-    if (index === current) stage.setAttribute("aria-current", "step");
+    const visited = visitedStages.has(stage.dataset.phase);
+    stage.dataset.complete = String(visited && stage !== current);
+    stage.dataset.skipped = String(!visited && index < reached);
+    if (stage === current) stage.setAttribute("aria-current", "step");
     else stage.removeAttribute("aria-current");
   });
+  if (!current || current === previous) return;
+  const target = byId(current.dataset.target);
+  if (target && !target.hidden) {
+    const smooth = !matchMedia("(prefers-reduced-motion: reduce)").matches;
+    target.scrollIntoView({ block: "start", behavior: smooth ? "smooth" : "auto" });
+  }
 }
 
 function showCapturePlaceholder(visit, message, loading) {
@@ -195,6 +221,7 @@ function activity(event, title, detail = "") {
   byId("timeline-empty").hidden = true;
   const row = appendRow("timeline", time, element("strong", title));
   if (detail) row.append(element("p", detail, "subtle"));
+  return row;
 }
 
 function recordDecision({ decision, decided_by }) {
@@ -300,16 +327,18 @@ const render = {
   },
   plan(event, p) {
     setTextLoading("plan", false);
-    setPhase("captures");
     byId("plan").textContent = p.text;
     for (const item of p.hypotheses) {
       const title = element("div", "", "row-title");
-      const state = element("span", "Open", "subtle");
+      const state = element("span", "", "chip");
       const detail = element("p", "", "subtle");
-      title.append(element("strong", `${item.id} · ${item.text}`), state);
+      title.append(element("strong", item.text), state);
       const row = appendRow("hypotheses", title, detail);
       hypothesisRows.set(item.id, { row, state, detail });
+      setHypothesisChip(item.id, "open");
     }
+    stageNote("plan", `${p.hypotheses.length} ${p.hypotheses.length === 1 ? "question" : "questions"}`);
+    setPhase("captures");
   },
   hypothesis_update(event, p) {
     if (p.id === "H1" && p.status === "supported") {
@@ -317,7 +346,7 @@ const render = {
     }
     const entry = hypothesisRows.get(p.id);
     if (!entry) return;
-    entry.state.textContent = p.status[0].toUpperCase() + p.status.slice(1);
+    setHypothesisChip(p.id, p.status);
     entry.detail.textContent = p.reason;
     entry.row.querySelectorAll("a").forEach((link) => link.remove());
     entry.row.append(...citeLinks(p.evidence));
@@ -331,6 +360,13 @@ const render = {
     setVisitState(p.visit, "Dispatched", "running");
     const round = p.round ? `Round ${p.round} · ` : "";
     activity(event, `${round}Dispatch ${p.visit}`, p.reason);
+    roundCard(p);
+    if (p.round > 1) {
+      stageNote("followups", `Round ${p.round} · ${browserLabel(p.visit).toLowerCase()}`);
+      setPhase("followups");
+    } else {
+      stageNote("captures", "Scanner and desktop browser");
+    }
   },
   sandbox_created(event, p) {
     setPhase("captures");
@@ -378,6 +414,8 @@ const render = {
   approval_requested(event, p) {
     closeApproval(p.visit);
     byId("approval-stage").hidden = false;
+    stageNote("approval", `Waiting · ${p.host}`);
+    setPhase("approval");
     const card = element("article", "", "approval-card");
     const title = element("p", "", "approval-title");
     title.append("The agent wants to submit the decoy login on ", element("strong", p.host || "this page"));
@@ -442,6 +480,10 @@ const render = {
     appendRow("approval-outcomes", element("strong", `${browserLabel(p.visit)} · ${outcome}`), element("span", p.reason ?? "", "subtle"));
     const denied = p.decision === "denied" || p.decision === "denied_by_analyst";
     setVisitState(p.visit, denied ? "Submit denied" : "Submit approved", "running");
+    stageNote("approval", outcome);
+    // An auto-approval has no request, so record the stage as passed without moving focus to it.
+    visitedStages.add("approval");
+    setPhase(stages.find((stage) => stage.hasAttribute("aria-current"))?.dataset.phase ?? "approval");
     activity(event, `${p.visit} · Step ${p.step} · ${outcome}`, p.reason);
   },
   screenshot(event, p) {
@@ -461,7 +503,6 @@ const render = {
     frames.hidden = false;
     show();
   },
-  request_seen() { increment("requests"); },
   probe_seen() { increment("probes"); },
   decoy_sent(event, p) {
     if (!observedHosts.has(p.host)) observedHosts.set(p.host, new Set());
@@ -477,11 +518,18 @@ const render = {
     const total = Number(byId("blocked-count").textContent);
     setCheck("containment", `${total} blocked ${total === 1 ? "request" : "requests"}`, "flagged");
     byId("blocked-empty").hidden = true;
+    const existing = blockedRows.get(p.host);
+    if (existing) {
+      existing.count += 1;
+      existing.state.textContent = `Blocked ×${existing.count}`;
+      return;
+    }
     const title = element("div", "", "row-title");
     const state = element("strong", "Blocked");
     state.dataset.tone = "risk";
     title.append(element("strong", p.host), state);
     appendRow("blocked", title, element("p", p.error, "subtle"));
+    blockedRows.set(p.host, { state, count: 1 });
   },
   sandbox_stats(event, p) {
     const meter = element("meter", "");
@@ -500,6 +548,9 @@ const render = {
   },
   resource_limit_hit(event, p) {
     increment("limits");
+    limitHit = true;
+    for (const row of byId("timeline").querySelectorAll("[data-container-error]")) row.remove();
+    setRoundState(p.visit, `${p.kind[0].toUpperCase()}${p.kind.slice(1)} limit reached`, "risk");
     setCheck("containment", `Sandbox hit its ${p.kind} limit`, "flagged");
     byId("blocked-empty").hidden = true;
     appendRow("blocked", element("strong", `${p.visit} · ${p.kind} limit reached`));
@@ -508,10 +559,12 @@ const render = {
   sandbox_destroyed(event, p) {
     increment("destroyed");
     setVisitState(p.visit, "Sandbox closed", "finished");
-    if (byId("destroyed").textContent === byId("created").textContent) setPhase("verdict");
+    setRoundState(p.visit, "Sandbox closed", "done");
+    // A zero peak means the stats watcher never sampled, not that the browser used no memory.
+    const peak = p.peak_mem_mb > 0 ? ` · ${p.peak_mem_mb} MB peak` : "";
     sandboxRow(p.visit).replaceChildren(
       element("strong", `${p.visit} · Destroyed`),
-      element("p", `${p.lifetime_s}s lifetime · ${p.peak_mem_mb} MB peak`, "subtle"),
+      element("p", `${p.lifetime_s}s lifetime${peak}`, "subtle"),
     );
     activity(event, `Sandbox destroyed · ${p.visit}`);
   },
@@ -532,10 +585,13 @@ const render = {
     const label = p.verdict;
     stamp.textContent = label;
     activeResult = label;
-    stamp.dataset.tone = { Phishing: "risk", Suspicious: "warn", Inconclusive: "warn", "No evidence found": "good" }[label];
+    stamp.dataset.tone = { Phishing: "risk", Suspicious: "warn", Inconclusive: "neutral", "No evidence found": "good" }[label];
+    stageNote("verdict", label);
+    setPhase("verdict");
     for (const reason of p.reasons) {
-      appendRow("reasons", element("strong", `${reason.signal} · ${reason.signal === "S3" ? "Context · " : ""}${reason.text}`), ...citeLinks(reason.evidence));
+      appendRow("reasons", element("strong", `${reason.signal === "S3" ? "Context · " : ""}${reason.text}`), ...citeLinks(reason.evidence));
     }
+    for (const [id, entry] of hypothesisRows) if (entry.status === "open") setHypothesisChip(id, "untested");
     if (p.untested.length) {
       byId("untested").hidden = false;
       byId("untested").textContent = `Untested · ${p.untested.join(", ")}`;
@@ -559,6 +615,11 @@ const render = {
       activity(event, "Planner unavailable, rules only");
       return;
     }
+    // A sandbox killed by its own limit reports "not running"; the verdict still follows.
+    if (/not running/i.test(p.message)) {
+      if (!limitHit) activity(event, "Sandbox stopped early", p.where).dataset.containerError = "";
+      return;
+    }
     stop(`${p.where}: ${p.message}`, "error");
   },
 };
@@ -569,6 +630,33 @@ function browserLabel(visit) {
   if (name.startsWith("victim")) return "Desktop browser";
   if (name.startsWith("robot")) return "Scanner browser";
   return name;
+}
+
+function setHypothesisChip(id, status) {
+  const entry = hypothesisRows.get(id);
+  if (!entry) return;
+  entry.status = status;
+  entry.state.textContent = hypothesisChips[status] ?? status;
+  entry.state.dataset.status = status;
+}
+
+function roundCard(p) {
+  if (!(p.round > 1)) return;
+  byId("rounds-stage").hidden = false;
+  const card = element("article", "", "round-card");
+  const state = element("span", "Running", "round-state");
+  state.dataset.state = "running";
+  card.append(element("strong", `Round ${p.round} · ${browserLabel(p.visit)}`), state);
+  if (p.reason) card.append(element("p", p.reason, "subtle"));
+  appendRow("rounds", card);
+  roundCards.set(p.visit, state);
+}
+
+function setRoundState(visit, text, state) {
+  const badge = roundCards.get(visit);
+  if (!badge || (badge.dataset.state === "risk" && state === "done")) return;
+  badge.textContent = text;
+  badge.dataset.state = state;
 }
 
 function closeApproval(visit) {
@@ -612,7 +700,14 @@ function reset() {
   clearApprovals();
   document.querySelector(".workspace").replaceWith(initialWorkspace.cloneNode(true));
   for (const id of counterIds) byId(id).textContent = "0";
-  for (const cache of [hypothesisRows, sandboxRows, stepReasons, observedHosts, thirdPartyHosts]) cache.clear();
+  for (const cache of [hypothesisRows, sandboxRows, stepReasons, observedHosts, thirdPartyHosts, blockedRows, roundCards, visitedStages]) cache.clear();
+  limitHit = false;
+  for (const stage of stages) {
+    stage.removeAttribute("aria-current");
+    delete stage.dataset.complete;
+    delete stage.dataset.skipped;
+    stage.querySelector(".stage-note").textContent = "";
+  }
   lastEvent = 0;
   scanId = undefined;
   byId("case-id").textContent = "";
@@ -646,7 +741,7 @@ urlInput.addEventListener("input", selectPreset);
 function configureCaptureView(enabled) {
   captureOnly = enabled;
   byId("active-exchange").dataset.captureOnly = String(enabled);
-  byId("environment").textContent = enabled ? "Passive capture" : playback ? "Recorded investigation" : "Simulation workspace";
+  byId("environment").textContent = enabled ? "Passive capture" : playback ? "Recorded investigation" : liveService ? "Live investigation" : "Simulation workspace";
   byId("comparison-heading").textContent = enabled ? "Public-page screenshot" : "Browser comparison";
   byId("scanner-label").textContent = enabled ? "Public page" : "Scanner bot";
   byId("scanner-profile").textContent = enabled ? "Passive capture" : "Headless browser";
@@ -752,12 +847,13 @@ fetch("/api/health")
     byId("scoreboard-run").hidden = !scoreboard_enabled;
     if (!demo && !scanId) byId("environment").textContent = "Public link capture";
     const live = live_presets && Object.keys(live_presets).length > 0;
+    liveService = Boolean(live);
     if (live) {  // presets start real sandboxed investigations on this VM's fixture hosts
       for (const button of presets) {
         const url = live_presets[button.dataset.preset];
         if (url) { button.dataset.url = url; button.hidden = false; } else button.hidden = true;
       }
-      if (!scanId) byId("environment").textContent = "Live sandbox investigations";
+      if (!scanId) byId("environment").textContent = "Live investigation";
     }
     byId("simulated-presets").hidden = !(demo || live);
   })

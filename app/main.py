@@ -82,10 +82,10 @@ def demo_events(url, mode):
     phishing = not (legit or bomb)
     yield "scan_started", {"url": url, "mode": mode, "decoy_email": DECOY}
     hypotheses = [
-        {"id": "H1", "text": "The scanner and victim see different pages.", "status": "open"},
-        {"id": "H2", "text": "The password reaches an unrelated host.", "status": "open"},
-        {"id": "H3", "text": "The sign-in form appears only for some visitors.", "status": "open"},
-        {"id": "H4", "text": "The destination could be a legitimate login provider.", "status": "open"},
+        {"id": "H1", "text": "Do the scanner and the victim see different pages?", "status": "open"},
+        {"id": "H2", "text": "Does the password go to an unrelated host?", "status": "open"},
+        {"id": "H3", "text": "Does the sign-in form appear only for some visitors?", "status": "open"},
+        {"id": "H4", "text": "Is the destination a legitimate login provider?", "status": "open"},
     ]
     yield "plan", {
         "text": "I’ll compare two browser views and trace the decoy form submission.",
