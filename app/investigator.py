@@ -39,11 +39,12 @@ PLAN_SCHEMA = {
     "additionalProperties": False,
 }
 
+SIGNALS = ("S1", "S2", "S3", "S4", "M1", "M2", "M3", "M4", "M5")
 _CLAIM = {
     "type": "object",
     "properties": {
         "hypothesis": {"type": "string"},
-        "signal": {"type": "string"},
+        "signal": {"type": "string", "enum": list(SIGNALS)},
         "text": {"type": "string"},
         "cite": {"type": "array", "items": {"type": "string"}},
     },
@@ -93,8 +94,8 @@ Tools (exactly one per answer):
   a credential destination serves: a real service has a real site; a collector serves nothing.
 - victim_retry: a desktop victim visit with one extra goal ("goal", max 120 chars), for a step
   the last victim visit could not get past.
-- conclude: end the case. Give "claims" (each cites evidence from the index below, exactly as
-  written), "action" ("block" only if the evidence shows a scam, else "none"), and "untested"
+- conclude: end the case. Give "claims" (each with "signal" set to the signal id such as "S1",
+  and "cite" copied exactly from the index), "action" ("block" only if the evidence shows a scam, else "none"), and "untested"
   (what you could not test).
 Rules:
 - Write every "reason" in first person, max 25 words, for example "I send a phone because the
@@ -220,8 +221,8 @@ def _cite_exists(scan_dir: pathlib.Path, cite: str) -> bool:
 
 
 def _validator(scan_dir: pathlib.Path, ids: set[str], cites: set[str], allowed: tuple[str, ...],
-               signal_cites: dict[str, list[str]] | None = None):
-    signal_cites = signal_cites or {}
+               signal_cites: dict[str, list[str]] | None = None, signal_texts: dict[str, str] | None = None):
+    signal_cites, signal_texts = signal_cites or {}, signal_texts or {}
 
     def check(step: dict) -> None:
         tool = step.get("tool")
@@ -235,6 +236,9 @@ def _validator(scan_dir: pathlib.Path, ids: set[str], cites: set[str], allowed: 
             raise ValueError("victim_retry needs a goal")
         if tool == "conclude" and step.get("action") not in ("block", "none"):
             raise ValueError("conclude needs action block or none")
+        for c in step.get("claims") or []:  # models sometimes put the signal's text where its id goes
+            if c.get("signal") not in SIGNALS:
+                c["signal"] = signal_texts.get(" ".join(str(c.get("signal", "")).split()), c.get("signal"))
         # H4 is code-only and unknown ids mean nothing: drop those updates, do not fail the step
         step["updates"] = [u for u in step.get("updates") or [] if u["id"] in ids and u["id"] != "H4"]
         for u in step["updates"]:
@@ -272,7 +276,8 @@ def next_step(scan_id: str, summaries: list[dict], *, budget: dict | None = None
         reply = llm.chat_json([{"role": "system", "content": STEP_PROMPT}, {"role": "user", "content": user}],
                               STEP_SCHEMA, name="investigator_step", effort="medium", max_tokens=2048,
                               validate=_validator(scan_dir, {h["id"] for h in hyps}, cites, allowed,
-                                                  {s: v["cite"] for s, v in index["signals"].items() if v["cite"]}))
+                                                  {s: v["cite"] for s, v in index["signals"].items() if v["cite"]},
+                                                  {" ".join(v["text"].split()): s for s, v in index["signals"].items()}))
         step = reply.data
     except llm.LLMError as e:
         _emit(scan_id, "error", {"where": "investigator", "message": f"Planner unavailable, rules only: {e}"[:300]})
