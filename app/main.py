@@ -1,0 +1,348 @@
+"""Lane C dashboard and local simulated investigation transport."""
+
+import asyncio
+import json
+import os
+from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Literal
+from uuid import uuid4
+
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, HttpUrl
+
+ROOT = Path(__file__).resolve().parent
+PRESETS = {
+    "legit": "https://vexalo.example/login",
+    "kit": "https://vexalo-docs.example/share",
+    "mobile": "https://vexalo-docs.example/m/",
+    "bomb": "https://vexalo-docs.example/bomb",
+}
+DECOY = "analyst.demo@decoy.example"
+LIMITS = {"memory": 2048, "cpus": 2, "pids": 512, "seconds": 120}
+DEMO_FILES = {
+    "robot/final.png": "news.png",
+    "robot/login.png": "login.png",
+    "victim/step-01.png": "document.png",
+    "victim/login.png": "login.png",
+    "victim_mobile-3/login.png": "login.png",
+    "checks/destinations.jsonl": "destinations.jsonl",
+    "victim/network.txt": "network.txt",
+    "victim_mobile-3/network.txt": "network.txt",
+}
+
+
+def timestamp():
+    return datetime.now(UTC).isoformat()
+
+
+@dataclass
+class Scan:
+    url: str
+    mode: str
+    status: str = "running"
+    verdict: dict | None = None
+    decision: str | None = None
+    decided_by: str | None = None
+    events: list[dict] = field(default_factory=list)
+    changed: asyncio.Condition = field(default_factory=asyncio.Condition)
+
+    async def emit(self, event_type, payload):
+        async with self.changed:
+            self.events.append({
+                "id": len(self.events) + 1, "ts": timestamp(),
+                "type": event_type, "payload": payload,
+            })
+            self.changed.notify_all()
+
+
+def demo_events(url, mode):
+    preset = next((key for key, value in PRESETS.items() if value == url), "kit")
+    legit = preset == "legit"
+    bomb = preset == "bomb"
+    mobile = preset == "mobile"
+    scam = not (legit or bomb)
+    yield "scan_started", {"url": url, "mode": mode, "decoy_email": DECOY}
+    hypotheses = [
+        {"id": "H1", "text": "The scanner and victim see different pages.", "status": "open"},
+        {"id": "H2", "text": "The password reaches an unrelated host.", "status": "open"},
+        {"id": "H3", "text": "The sign-in form appears only for some visitors.", "status": "open"},
+        {"id": "H4", "text": "The destination could be a legitimate login provider.", "status": "open"},
+    ]
+    yield "plan", {
+        "text": "I’ll compare two browser views and trace the decoy form submission.",
+        "hypotheses": hypotheses,
+    }
+    for index, visit in enumerate(("robot", "victim"), start=1):
+        reason = (
+            "I’ll capture what a scanner can see." if visit == "robot"
+            else "I’ll compare that view with the victim session."
+        )
+        yield "dispatch", {
+            "visit": visit, "profile": visit, "tool": visit, "round": 1,
+            "reason": reason, "budget_left": {"sandboxes": 5 - index, "seconds": 240},
+        }
+        yield "sandbox_created", {
+            "visit": visit, "profile": visit, "container": f"demo-{visit}",
+            "runtime": "simulated", "limits": LIMITS,
+        }
+    yield "robot_done", {
+        "final_url": PRESETS["legit"] if legit else "https://vexalo-docs.example/news",
+        "title": "Vexalo sign in" if legit else "Vexalo News",
+        "screenshot": "robot/login.png" if legit else "robot/final.png",
+        "has_password_field": legit,
+    }
+    if not legit:
+        yield "agent_step", {
+            "visit": "victim", "step": 1, "model": "simulated", "action": "wait", "ref": None, "url": url, "title": "Vexalo Documents",
+            "reason": "I’m checking what the shared document page shows.",
+            "is_login_page": False, "brand_seen": "Vexalo",
+        }
+        yield "screenshot", {"visit": "victim", "step": 1, "path": "victim/step-01.png"}
+    yield "sandbox_destroyed", {
+        "visit": "robot", "container": "demo-robot", "lifetime_s": 4, "peak_mem_mb": 184,
+    }
+    victim = "victim"
+    if mobile:
+        yield "sandbox_destroyed", {
+            "visit": "victim", "container": "demo-victim", "lifetime_s": 7, "peak_mem_mb": 310,
+        }
+        victim = "victim_mobile-3"
+        yield "dispatch", {
+            "visit": victim, "profile": "victim_mobile", "tool": "victim_mobile", "round": 2,
+            "reason": "I’ll compare a mobile visit because the desktop view stopped at the document.",
+            "budget_left": {"sandboxes": 2, "seconds": 220},
+        }
+        yield "sandbox_created", {
+            "visit": victim, "profile": "victim_mobile", "container": f"demo-{victim}",
+            "runtime": "simulated", "limits": LIMITS,
+        }
+    peak = 2048 if bomb else 428
+    yield "sandbox_stats", {
+        "visit": victim, "mem_mb": peak, "mem_limit_mb": 2048, "cpu_pct": 24, "pids": 32,
+    }
+    yield "host_stats", {"load_1m": 0.42, "mem_used_pct": 28}
+    reasons = []
+    trail = []
+    if bomb:
+        yield "resource_limit_hit", {
+            "visit": victim, "kind": "memory", "peak_mb": peak, "limit_mb": 2048,
+        }
+        reasons.append({"signal": "M5", "text": "Victim session reached its memory cap.", "evidence": []})
+    else:
+        yield "agent_step", {
+            "visit": victim, "step": 2, "model": "simulated", "action": "done", "ref": None, "url": url, "title": "Vexalo sign in",
+            "reason": "I found a sign-in form in the victim view.",
+            "is_login_page": True, "brand_seen": "Vexalo",
+        }
+        login = f"{victim}/login.png"
+        yield "screenshot", {"visit": victim, "step": 2, "path": login}
+        host = "cdn-metrics.example" if scam else "vexalo.example"
+        yield "approval", {
+            "visit": victim, "step": 2, "action": "submit", "ref": None,
+            "typed": ["{{DECOY_EMAIL}}", "{{DECOY_PASSWORD}}"],
+            "checks": [{"name": "Synthetic values only", "ok": True}],
+            "decision": "auto_approved", "reason": "The simulated submission uses only decoy placeholders.",
+        }
+        trail.append(host)
+        receipt = f"{victim}/network.txt"
+        yield "request_seen", {"visit": victim, "method": "POST", "host": host, "url": f"https://{host}/submit"}
+        yield "decoy_sent", {"host": host, "url": f"https://{host}/submit", "field": "password", "encoding": "plain"}
+        if scam:
+            yield "probe_seen", {"visit": victim, "name": "webdriver"}
+            for blocked in ("Cloud metadata", "Host gateway", "Application"):
+                yield "request_blocked", {
+                    "visit": victim, "host": blocked, "url": "https://blocked.example/",
+                    "error": "Simulated network policy rejection",
+                }
+            yield "claim_rejected", {
+                "claim": "The decoy was sent to a second collector.",
+                "reason": "The recorded request shows one destination.",
+            }
+            reasons.extend([
+                {"signal": "S1", "text": "The decoy password reached an unrelated host.", "evidence": [f"{receipt}:1"]},
+                {"signal": "S2", "text": "The scanner saw news while the victim saw a sign-in form.",
+                 "evidence": ["robot/final.png", login]},
+            ])
+        for key, evidence in (("H1", [login]), ("H2", [f"{receipt}:1"] if scam else [])):
+            yield "hypothesis_update", {
+                "id": key, "status": "supported" if scam else "refuted",
+                "reason": "Comparison complete.", "evidence": evidence,
+            }
+        yield "hypothesis_update", {
+            "id": "H4", "status": "refuted" if scam else "supported",
+            "reason": (
+                "The destination is unrelated to Vexalo and is not a known login provider."
+                if scam else "Vexalo received the decoy on its own domain."
+            ),
+            "evidence": ["checks/destinations.jsonl:1"],
+        }
+        if mobile:
+            yield "hypothesis_update", {
+                "id": "H3", "status": "supported",
+                "reason": "The mobile capture shows the sign-in form.", "evidence": [login],
+            }
+    yield "sandbox_destroyed", {
+        "visit": victim, "container": f"demo-{victim}", "lifetime_s": 12, "peak_mem_mb": peak,
+    }
+    yield "verdict", {
+        "verdict": "Scam" if scam else "Suspicious" if bomb else "No evidence found",
+        "reasons": reasons, "password_sent_to": trail,
+        "action_taken": "blocked" if scam else "none", "decided_by": "agent",
+        "untested": ["Password destination"] if bomb else [],
+    }
+
+
+async def play_demo(scan, delay):
+    try:
+        for event_type, payload in demo_events(scan.url, scan.mode):
+            await asyncio.sleep(delay)
+            if event_type == "verdict":
+                scan.verdict = payload
+                if payload["action_taken"] == "blocked":
+                    scan.decision = "block"
+                    scan.decided_by = "agent"
+            await scan.emit(event_type, payload)
+    finally:
+        async with scan.changed:
+            scan.status = "finished" if scan.verdict else "failed"
+            scan.changed.notify_all()
+
+
+@asynccontextmanager
+async def lifespan(application):
+    application.state.scans = {}
+    application.state.tasks = set()
+    application.state.demo = os.getenv("PD_FEATURE_FAKE_SCAN") == "1"
+    application.state.delay = 0.38
+    yield
+    tasks = list(application.state.tasks)
+    for task in tasks:
+        task.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
+
+
+app = FastAPI(lifespan=lifespan)
+app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
+
+
+class ScanInput(BaseModel):
+    url: HttpUrl
+    mode: Literal["standard", "high_risk"] = "standard"
+
+
+class DecisionInput(BaseModel):
+    decision: Literal["block", "release"]
+
+
+def find_scan(request, scan_id):
+    scan = request.app.state.scans.get(scan_id)
+    if scan is None:
+        raise HTTPException(404, "Scan not found")
+    return scan
+
+
+@app.get("/")
+async def index():
+    return FileResponse(ROOT / "templates" / "index.html")
+
+
+@app.get("/api/health")
+async def health(request: Request):
+    return {"ok": True, "model": os.getenv("PD_MODEL"), "runtime": os.getenv("PD_RUNTIME", "runsc"),
+            "demo": getattr(request.app.state, "demo", False)}
+
+
+@app.post("/api/scans", status_code=202)
+async def start_scan(body: ScanInput, request: Request):
+    state = request.app.state
+    if not state.demo:
+        raise HTTPException(503, "Simulated scans are disabled")
+    scan_id = uuid4().hex
+    scan = Scan(str(body.url), body.mode)
+    state.scans[scan_id] = scan
+    task = asyncio.create_task(play_demo(scan, state.delay))
+    state.tasks.add(task)
+    task.add_done_callback(state.tasks.discard)
+    return {"scan_id": scan_id, "queued_position": None}
+
+
+@app.get("/api/scans/{scan_id}")
+async def scan_record(scan_id: str, request: Request):
+    scan = find_scan(request, scan_id)
+    return {"id": scan_id, "url": scan.url, "mode": scan.mode, "status": scan.status,
+            "verdict": scan.verdict, "decision": scan.decision, "decided_by": scan.decided_by}
+
+
+@app.get("/api/scans/{scan_id}/events")
+async def scan_events(scan_id: str, request: Request, after: int = 0):
+    scan = find_scan(request, scan_id)
+    last_id = request.headers.get("Last-Event-ID", "")
+    cursor = max(0, int(last_id) if last_id.isascii() and last_id.isdecimal() and len(last_id) < 15 else after)
+
+    async def stream():
+        nonlocal cursor
+        while True:
+            heartbeat = False
+            async with scan.changed:
+                try:
+                    await asyncio.wait_for(
+                        scan.changed.wait_for(lambda current=cursor: current < len(scan.events) or scan.status != "running"),
+                        timeout=12,
+                    )
+                except TimeoutError:
+                    heartbeat = True
+                batch = scan.events[cursor:]
+                finished = scan.status != "running"
+            if heartbeat:
+                yield ": keepalive\n\n"
+            for event in batch:
+                cursor = event["id"]
+                yield f"id: {cursor}\ndata: {json.dumps(event)}\n\n"
+            if finished:
+                break
+
+    return StreamingResponse(stream(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@app.post("/api/scans/{scan_id}/decision")
+async def decide(scan_id: str, body: DecisionInput, request: Request):
+    scan = find_scan(request, scan_id)
+    if scan.verdict is None:
+        raise HTTPException(409, "Wait for the verdict before making a decision")
+    scan.decision = body.decision
+    scan.decided_by = "analyst"
+    payload = {"decision": scan.decision, "decided_by": scan.decided_by}
+    await scan.emit("decision", payload)
+    return payload
+
+
+@app.get("/api/scans/{scan_id}/files/{path:path}")
+async def evidence(scan_id: str, path: str, request: Request):
+    scan = find_scan(request, scan_id)
+    disclosed = any(
+        path in (event["payload"].get("path"), event["payload"].get("screenshot"))
+        or any(cite.split(":")[0] == path for cite in event["payload"].get("evidence", []))
+        or any(cite.split(":")[0] == path for reason in event["payload"].get("reasons", [])
+               for cite in reason["evidence"])
+        for event in scan.events
+    )
+    if not disclosed or path not in DEMO_FILES:
+        raise HTTPException(404, "Evidence not found")
+    fixture = ROOT / "static" / "demo" / DEMO_FILES[path]
+    if path == "checks/destinations.jsonl":
+        host = next(event["payload"]["host"] for event in scan.events if event["type"] == "decoy_sent")
+        brand_owned = host == "vexalo.example"
+        return PlainTextResponse(json.dumps({
+            "host": host, "field": "password", "same_site": brand_owned,
+            "brand_owned": brand_owned, "login_provider": False, "followup": None,
+        }) + "\n")
+    if fixture.suffix == ".txt":
+        host = next(event["payload"]["host"] for event in scan.events if event["type"] == "decoy_sent")
+        return PlainTextResponse(f"Simulated POST to {host}. Synthetic password marker observed.\n")
+    return FileResponse(fixture)
