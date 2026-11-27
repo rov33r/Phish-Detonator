@@ -351,7 +351,7 @@ def client_ip(request: Request) -> str | None:
 
 def over_rate_limit(ip: str | None) -> bool:
     """Public URL abuse (SPEC 10, A14): PD_RATE_LIMIT_PER_IP live scans per IP per 10 minutes; 0 disables."""
-    limit = int(os.getenv("PD_RATE_LIMIT_PER_IP", "5"))
+    limit = int(os.getenv("PD_RATE_LIMIT_PER_IP", "100"))
     if not limit or not ip:
         return False
     now = time.monotonic()
