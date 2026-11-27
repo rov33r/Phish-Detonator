@@ -15,7 +15,8 @@ Every SSE message is `{"id": <event id>, "ts": <ISO 8601>, "type": "<type>", "pa
 | `sandbox_created` | A | `{visit, profile, container, runtime, limits: {memory, cpus, pids, seconds}}` |
 | `robot_done` | A | `{final_url, title, screenshot, has_password_field}` |
 | `agent_step` | B | `{visit, step, action, ref, reason, url, title, is_login_page, brand_seen, model}` (`reason` is first person, max 20 words) |
-| `approval` | B | `{visit, step, action, ref, typed: ["{{DECOY_EMAIL}}", "{{DECOY_PASSWORD}}"], checks: [{name, ok}], decision: "auto_approved" or "denied", reason}` (SPEC 6.6; never the decoy value itself) |
+| `approval_requested` | B | `{visit, step, host, fields: ["email", "password"], timeout_s: 30}` (manual mode only, SPEC 6.6: the code checks passed and the agent waits for an analyst; the UI shows Approve and Deny with a countdown and answers with `POST /api/scans/{id}/approve` `{visit, decision: "approve" or "deny"}`) |
+| `approval` | B | `{visit, step, action, ref, typed: ["{{DECOY_EMAIL}}", "{{DECOY_PASSWORD}}"], checks: [{name, ok}], decision, reason}` (SPEC 6.6; never the decoy value itself). `decision`: `auto_approved` or `denied` (auto mode, or a failed check); `approved_by_analyst`, `denied_by_analyst` or `timed_out` (manual mode; on `timed_out` the code policy approved the submit because nobody answered) |
 | `screenshot` | B | `{visit, step, path}` |
 | `request_seen` | A | `{visit, method, host, url}` |
 | `decoy_sent` | B | `{visit, host, url, field: "email" or "password", encoding: "plain", "url" or "base64"}` |
