@@ -1,0 +1,3 @@
+{"ts": 1795782186.3019361, "url": "http://127.0.0.1:443/", "host": "127.0.0.1", "error": "net::ERR_CONNECTION_REFUSED"}
+{"ts": 1795782192.155519, "url": "http://169.254.169.254/latest/meta-data/", "host": "169.254.169.254", "error": "net::ERR_ABORTED"}
+{"ts": 1795782192.1560042, "url": "http://172.30.0.1:8000/api/health", "host": "172.30.0.1", "error": "net::ERR_ABORTED"}

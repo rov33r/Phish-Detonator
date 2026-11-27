@@ -1,0 +1,8 @@
+{"ts": 1795782084.374476, "method": "GET", "url": "http://vexalo-docs.localhost:8081/", "host": "vexalo-docs.localhost", "resourceType": "document", "postData": null}
+{"ts": 1795782092.385866, "method": "GET", "url": "http://vexalo-docs.localhost:8081/gate", "host": "vexalo-docs.localhost", "resourceType": "document", "postData": null}
+{"ts": 1795782097.7787251, "method": "GET", "url": "http://vexalo-docs.localhost:8081/login", "host": "vexalo-docs.localhost", "resourceType": "document", "postData": null}
+{"ts": 1795782097.788922, "method": "GET", "url": "http://169.254.169.254/latest/meta-data/", "host": "169.254.169.254", "resourceType": "fetch", "postData": null}
+{"ts": 1795782097.7929442, "method": "GET", "url": "http://172.30.0.1:8000/api/health", "host": "172.30.0.1", "resourceType": "fetch", "postData": null}
+{"ts": 1795782097.7939641, "method": "GET", "url": "http://127.0.0.1:443/", "host": "127.0.0.1", "resourceType": "fetch", "postData": null}
+{"ts": 1795782104.395829, "method": "POST", "url": "http://cdn-metrics.localhost:8081/v1/collect", "host": "cdn-metrics.localhost", "resourceType": "fetch", "postData": "{\"email\":\"elin.falk.0f07a7@aurora-mail.com\",\"password\":\"56FHrDdjk6cLj6d#\"}"}
+{"ts": 1795782104.401988, "method": "GET", "url": "http://vexalo.localhost:8081/login", "host": "vexalo.localhost", "resourceType": "document", "postData": null}
