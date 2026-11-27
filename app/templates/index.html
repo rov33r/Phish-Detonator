@@ -1,9 +1,14 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Phish Detonator | Investigation</title>
+  <title>Phish Detonator | Link investigation</title>
+  <script>
+    try {
+      if (localStorage.getItem("phishdet-theme") === "light") document.documentElement.dataset.theme = "light";
+    } catch {}
+  </script>
   <link rel="stylesheet" href="/static/app.css">
   <script src="/static/app.js" defer></script>
 </head>
@@ -11,98 +16,178 @@
   <header class="bar">
     <div class="wrap bar-inner">
       <div class="brand"><span class="mark" aria-hidden="true"></span>Phish Detonator</div>
-      <span class="tag" id="environment">Simulation workspace</span>
+      <div class="bar-actions">
+        <span class="tag" id="environment">Simulation workspace</span>
+        <button type="button" id="theme-toggle" class="theme-toggle">Light mode</button>
+      </div>
     </div>
   </header>
   <main class="wrap">
-    <h1>Link investigation</h1>
-    <p class="intro">Compare the scanner and victim views, then trace where a decoy password goes.</p>
-    <form id="scan-form" class="scan-form">
-      <label class="url-field">URL to investigate
-        <input type="url" name="url" id="url" placeholder="https://example.com/link" required autocomplete="off">
-      </label>
-      <label>Scan mode
-        <select name="mode" id="mode"><option value="standard">Standard</option><option value="high_risk">High risk</option></select>
-      </label>
-      <button class="primary" id="scan-button">Start scan</button>
-    </form>
-    <div class="presets" aria-label="Simulation presets">
-      <span>Try a preset</span>
-      <button type="button" data-url="https://vexalo.example/login" aria-pressed="false">Legit Vexalo</button>
-      <button type="button" data-url="https://vexalo-docs.example/share" aria-pressed="false">Phishing kit</button>
-      <button type="button" data-url="https://vexalo-docs.example/m/" aria-pressed="false">Mobile-only kit</button>
-      <button type="button" data-url="https://vexalo-docs.example/bomb" aria-pressed="false">Resource bomb</button>
-    </div>
-    <div class="session"><span class="status" id="status" role="status">Ready to scan</span><code id="case-id"></code></div>
-    <div class="workspace">
-      <div class="surface comparison">
-        <div class="section-head"><h2>Browser comparison</h2><span class="subtle">Captured evidence</span></div>
-        <div class="panes">
-          <section class="pane" aria-labelledby="scanner-heading">
-            <div class="pane-heading"><h3 id="scanner-heading">Scanner saw</h3><span class="subtle">Headless</span></div>
-            <div class="capture" id="robot-capture"><span>Waiting for scanner capture</span></div>
-            <p class="caption mono" id="robot-url">Final URL will appear here.</p>
-          </section>
-          <section class="pane" aria-labelledby="victim-heading">
-            <div class="pane-heading"><h3 id="victim-heading">Victim saw</h3><span class="subtle">Interactive</span></div>
-            <div class="capture" id="victim-capture"><span>Waiting for victim capture</span></div>
-            <p class="caption" id="agent-step">Agent activity will appear here.</p>
-            <div class="frames" id="frames" aria-label="Victim screenshots" hidden></div>
-          </section>
+    <section class="welcome" id="welcome" aria-labelledby="page-title">
+      <span class="welcome-mark" aria-hidden="true"><span></span><span></span></span>
+      <h1 id="page-title">What link should we investigate?</h1>
+      <p class="intro">Paste a link to compare what the scanner and visitor see.</p>
+    </section>
+    <section class="conversation" aria-label="Investigation conversation">
+      <div id="conversation-history"></div>
+      <div class="exchange" id="active-exchange" hidden>
+        <div class="prompt-message"><span>You</span><p id="submitted-url"></p></div>
+        <div class="response-message">
+          <div class="response-label"><span class="mark" aria-hidden="true"></span>Phish Detonator</div>
+          <div class="session">
+            <span class="status" id="status" role="status">Ready to scan</span>
+            <code id="case-id"></code>
+          </div>
+          <ol class="scan-stages" aria-label="Scan progress">
+            <li data-phase="plan">Plan</li>
+            <li data-phase="captures">Compare browsers</li>
+            <li data-phase="verdict">Review findings</li>
+          </ol>
+          <div class="workspace">
+            <section class="surface comparison live-investigation" aria-labelledby="comparison-heading">
+              <h2 id="comparison-heading">Browser comparison</h2>
+              <div class="section-head comparison-head">
+                <div><p id="comparison-state">Sample captures</p></div>
+                <div class="compare-controls" aria-label="Browser evidence layout" role="group">
+                  <button type="button" data-view="pair" aria-pressed="true">Both</button>
+                  <button type="button" data-view="scanner" aria-pressed="false">Scanner</button>
+                  <button type="button" data-view="victim" aria-pressed="false">Victim</button>
+                </div>
+              </div>
+              <div class="compare-stage" id="compare-stage" data-view="pair">
+                <figure class="compare-picture compare-picture--scanner">
+                  <figcaption>
+                    <span class="browser-id"><span class="browser-symbol browser-symbol--scanner" aria-hidden="true"></span><span><strong>Scanner bot</strong><small>Headless browser</small></span></span>
+                    <span class="browser-state" id="scanner-state" data-state="waiting">Queued</span>
+                  </figcaption>
+                  <div class="capture-placeholder" id="pending-robot" hidden>
+                    <div class="capture-skeleton" aria-hidden="true">
+                      <span class="skeleton-bar"></span><span class="skeleton-line"></span>
+                      <span class="skeleton-line"></span><span class="skeleton-block"></span>
+                    </div>
+                    <span class="capture-message" id="pending-robot-message">Waiting for scanner capture</span>
+                  </div>
+                  <img id="compare-robot" src="/static/demo/news.png" alt="Sample scanner capture showing a news page">
+                </figure>
+                <figure class="compare-picture compare-picture--victim">
+                  <figcaption>
+                    <span class="browser-id"><span class="browser-symbol browser-symbol--victim" aria-hidden="true"></span><span><strong>Victim view</strong><small>Browser operated by the agent</small></span></span>
+                    <span class="browser-state" id="victim-state" data-state="waiting">Queued</span>
+                  </figcaption>
+                  <div class="capture-placeholder" id="pending-victim" hidden>
+                    <div class="capture-skeleton" aria-hidden="true">
+                      <span class="skeleton-bar"></span><span class="skeleton-line"></span>
+                      <span class="skeleton-line"></span><span class="skeleton-block"></span>
+                    </div>
+                    <span class="capture-message" id="pending-victim-message">Waiting for victim capture</span>
+                  </div>
+                  <img id="compare-victim" src="/static/demo/login.png" alt="Sample victim capture showing a sign-in form">
+                </figure>
+              </div>
+              <div class="panes">
+                <section class="pane" aria-labelledby="scanner-heading">
+                  <div class="pane-heading"><h3 id="scanner-heading">Scanner saw</h3><span class="subtle">Headless</span></div>
+                  <p class="caption mono" id="robot-url">Final URL will appear here.</p>
+                </section>
+                <section class="pane" aria-labelledby="victim-heading">
+                  <div class="pane-heading"><h3 id="victim-heading">Victim saw</h3><span class="subtle">Interactive</span></div>
+                  <p class="caption" id="agent-step">Agent activity will appear here.</p>
+                  <div class="frames" id="frames" aria-label="Victim screenshots" hidden></div>
+                </section>
+              </div>
+              <div class="detection">
+                <h3>What the detector checks</h3>
+                <ul class="detection-list">
+                  <li id="check-cloak" data-state="waiting"><strong>Page mismatch</strong><span>Waiting for both views</span></li>
+                  <li id="check-password" data-state="waiting"><strong>Password destination</strong><span>Watching for a decoy submission</span></li>
+                  <li id="check-containment" data-state="waiting"><strong>Sandbox containment</strong><span>Watching for blocked activity</span></li>
+                </ul>
+              </div>
+            </section>
+            <div class="evidence-column">
+              <aside class="surface verdict" aria-labelledby="verdict-heading">
+                <h2 class="visually-hidden" id="verdict-heading">Verdict</h2>
+                <div class="section-body">
+                  <div class="text-skeleton" id="verdict-skeleton" aria-hidden="true" hidden>
+                    <span class="skeleton-line"></span><span class="skeleton-line"></span>
+                  </div>
+                  <p class="stamp" id="verdict">Awaiting evidence</p>
+                  <p id="decision" class="subtle" role="status">The verdict appears after the scan.</p>
+                  <ul class="clean rows" id="reasons" hidden></ul>
+                  <ul class="clean rows" id="rejected" hidden aria-label="Rejected claims"></ul>
+                  <p id="untested" class="subtle" hidden></p>
+                  <div id="decisions" class="decisions" hidden>
+                    <button type="button" data-decision="block">Block</button>
+                    <button type="button" data-decision="release">Release</button>
+                  </div>
+                </div>
+              </aside>
+              <details class="surface disclosure">
+                <summary>Password trail</summary>
+                <div class="section-body">
+                  <dl class="credentials">
+                    <dt>Decoy email</dt><dd id="email">Pending</dd>
+                    <dt>Password</dt><dd id="password">Pending</dd>
+                  </dl>
+                  <p class="subtle" id="trail-empty">No password destination observed.</p>
+                  <ul class="clean rows" id="trail" hidden></ul>
+                </div>
+              </details>
+              <details class="surface disclosure">
+                <summary>Containment</summary>
+                <div class="section-body">
+                  <p class="subtle" id="blocked-empty">No blocked activity observed.</p>
+                  <ul class="clean rows" id="blocked" hidden></ul>
+                  <ul class="clean rows" id="meters" hidden aria-label="Sandbox metrics"></ul>
+                  <p class="subtle" id="host" hidden></p>
+                </div>
+              </details>
+            </div>
+            <details class="surface investigation disclosure">
+              <summary>Investigation details</summary>
+              <div class="section-body investigation-body">
+                <div>
+                  <h3>Hypotheses</h3>
+                  <div class="text-skeleton" id="plan-skeleton" aria-hidden="true" hidden>
+                    <span class="skeleton-line"></span><span class="skeleton-line"></span>
+                  </div>
+                  <p id="plan" class="subtle">The investigator’s plan and hypotheses will appear here.</p>
+                  <ul class="clean rows" id="hypotheses" hidden></ul>
+                </div>
+                <div>
+                  <h3>Activity timeline</h3>
+                  <p id="timeline-empty" class="subtle">Sandbox dispatches and agent steps appear as they happen.</p>
+                  <ol class="clean timeline" id="timeline" hidden></ol>
+                </div>
+              </div>
+            </details>
+          </div>
+          <footer class="counts" aria-label="Current scan counters">
+            <span><b id="created">0</b> Created</span><span><b id="destroyed">0</b> Destroyed</span>
+            <span><b id="requests">0</b> Requests</span><span><b id="blocked-count">0</b> Blocked</span>
+            <span><b id="limits">0</b> Limits hit</span><span><b id="probes">0</b> Bot probes</span>
+          </footer>
         </div>
       </div>
-      <aside class="surface verdict" aria-labelledby="verdict-heading">
-        <div class="section-head"><h2 id="verdict-heading">Verdict</h2></div>
-        <div class="section-body">
-          <p class="stamp" id="verdict">Awaiting evidence</p>
-          <p id="decision" class="subtle" role="status">The verdict appears after the scan.</p>
-          <ul class="clean rows" id="reasons" hidden></ul>
-          <ul class="clean rows" id="rejected" hidden aria-label="Rejected claims"></ul>
-          <p id="untested" class="subtle" hidden></p>
-          <div id="decisions" class="decisions" hidden>
-            <button type="button" data-decision="block">Block</button>
-            <button type="button" data-decision="release">Release</button>
-          </div>
-        </div>
-      </aside>
-      <section class="surface investigation" aria-labelledby="investigation-heading">
-        <div class="section-head"><h2 id="investigation-heading">Investigation</h2></div>
-        <div class="section-body">
-          <p id="plan" class="subtle">The investigator’s plan and hypotheses will appear here.</p>
-          <ul class="clean rows" id="hypotheses" hidden></ul>
-          <h3>Activity timeline</h3>
-          <p id="timeline-empty" class="subtle">Sandbox dispatches and agent steps appear as they happen.</p>
-          <ol class="clean timeline" id="timeline" hidden></ol>
-        </div>
-      </section>
-      <div class="evidence-column">
-        <section class="surface" aria-labelledby="trail-heading">
-          <div class="section-head"><h2 id="trail-heading">Password trail</h2></div>
-          <div class="section-body">
-            <dl class="credentials">
-              <dt>Decoy email</dt><dd id="email">Pending</dd>
-              <dt>Password</dt><dd id="password">Pending</dd>
-            </dl>
-            <p class="subtle" id="trail-empty">No password destination observed.</p>
-            <ul class="clean rows" id="trail" hidden></ul>
-          </div>
-        </section>
-        <section class="surface" aria-labelledby="containment-heading">
-          <div class="section-head"><h2 id="containment-heading">Containment</h2></div>
-          <div class="section-body">
-            <p class="subtle" id="blocked-empty">No blocked activity observed.</p>
-            <ul class="clean rows" id="blocked" hidden></ul>
-            <ul class="clean rows" id="meters" hidden aria-label="Sandbox metrics"></ul>
-            <p class="subtle" id="host" hidden></p>
-          </div>
-        </section>
-      </div>
-    </div>
-    <footer class="counts" aria-label="Current scan counters">
-      <span><b id="created">0</b> Created</span><span><b id="destroyed">0</b> Destroyed</span>
-      <span><b id="requests">0</b> Requests</span><span><b id="blocked-count">0</b> Blocked</span>
-      <span><b id="limits">0</b> Limits hit</span><span><b id="probes">0</b> Bot probes</span>
-    </footer>
+    </section>
   </main>
+  <div class="composer-dock"><div class="wrap composer">
+      <form id="scan-form" class="scan-form">
+        <label class="url-field">URL to investigate
+          <input inputmode="url" autocapitalize="off" spellcheck="false" type="url" name="url" id="url" placeholder="https://example.com/link" required autocomplete="off">
+        </label>
+        <label>Scan mode
+          <select name="mode" id="mode"><option value="standard">Standard</option><option value="high_risk">High risk</option></select>
+        </label>
+        <button class="primary" id="scan-button">Start scan</button>
+      </form>
+      <div class="presets" aria-label="Simulation presets">
+        <span>Try a preset</span>
+        <button type="button" data-url="https://vexalo.example/login" aria-pressed="false">Legit Vexalo</button>
+        <button type="button" data-url="https://vexalo-docs.example/share" aria-pressed="false">Phishing kit</button>
+        <button type="button" data-url="https://vexalo-docs.example/m/" aria-pressed="false">Mobile-only kit</button>
+        <button type="button" data-url="https://vexalo-docs.example/bomb" aria-pressed="false">Resource bomb</button>
+      </div>
+  </div></div>
 </body>
 </html>
