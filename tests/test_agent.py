@@ -252,3 +252,18 @@ def test_runner_exception_becomes_browser_error(rig, monkeypatch):
         raise OSError("docker went away")
     monkeypatch.setattr(agent, "_exec", boom)
     assert agent.run_victim("s1", KIT + "/", "pd-s1-victim", DECOY)["stop_reason"] == "browser_error"
+
+
+def test_containment_events_emitted_live_once(rig):
+    out = rig["out"] / "victim"
+    out.mkdir()
+    (out / "blocked.jsonl").write_text("".join(json.dumps(r) + "\n" for r in [
+        {"ts": 1, "url": "http://169.254.169.254/latest/meta-data/", "host": "169.254.169.254",
+         "error": "net::ERR_CONNECTION_REFUSED"},
+        {"ts": 2, "url": "http://172.30.0.1:8000/api/health", "host": "172.30.0.1", "error": "net::ERR_CONNECTION_REFUSED"}]))
+    (out / "probes.jsonl").write_text(json.dumps({"ts": 1, "name": "navigator.webdriver"}) + "\n")
+    run(rig, KIT_SCRIPT)
+    blocked = [p for t, p in rig["events"] if t == "request_blocked"]
+    assert [b["host"] for b in blocked] == ["169.254.169.254", "172.30.0.1"]  # each line once, not per step
+    assert blocked[0]["visit"] == "victim" and "REFUSED" in blocked[0]["error"]
+    assert [p for t, p in rig["events"] if t == "probe_seen"] == [{"visit": "victim", "name": "navigator.webdriver"}]
