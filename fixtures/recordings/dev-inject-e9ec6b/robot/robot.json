@@ -1,0 +1,7 @@
+{
+  "final_url": "http://vexalo-docs.localhost:8081/news",
+  "title": "Stockholm news",
+  "text": "Stockholm today\n\nLight snow expected in the evening. Commuter trains run on the normal timetable.\n\nNothing to see here.",
+  "status": 200,
+  "has_password_field": false
+}

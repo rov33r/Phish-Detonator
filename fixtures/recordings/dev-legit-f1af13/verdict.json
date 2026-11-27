@@ -1,0 +1,66 @@
+{
+  "verdict": "No evidence found",
+  "reasons": [
+    {
+      "signal": "S3",
+      "text": "The page read webdriver to check for bots.",
+      "evidence": [
+        "victim/probes.jsonl:1",
+        "victim_mobile-4/probes.jsonl:1"
+      ]
+    }
+  ],
+  "rejected_claims": [
+    {
+      "claim": {
+        "hypothesis": "H1",
+        "signal": "S3",
+        "text": "The page is fully visible to robot visits; no scanner evasion. It does read webdriver but shows the same content regardless.",
+        "cite": []
+      },
+      "reason": "no evidence cited"
+    },
+    {
+      "claim": {
+        "hypothesis": "H3",
+        "signal": "S3",
+        "text": "Mobile and desktop visitors see the same sign-in page, so no device-only trap exists.",
+        "cite": [
+          "victim/agent.jsonl:4",
+          "victim_mobile-4/agent.jsonl:4"
+        ]
+      },
+      "reason": "the cited files do not support S3"
+    },
+    {
+      "claim": {
+        "hypothesis": "H5",
+        "signal": "S3",
+        "text": "The site is served from a localhost-spoofed hostname on non-standard port over plain HTTP.",
+        "cite": [
+          "robot/robot.json"
+        ]
+      },
+      "reason": "the cited files do not support S3"
+    }
+  ],
+  "decoy": {
+    "email": "linus.holm.60be7d@lake-mail.com",
+    "password_masked": "ct**************"
+  },
+  "robot_final_url": "http://vexalo.localhost:8081/",
+  "victim_login_host": "vexalo.localhost",
+  "brand_shown": "Vexalo",
+  "password_sent_to": [],
+  "email_shared_with": [],
+  "blocked_requests": [],
+  "h4": {
+    "status": "supported",
+    "reason": "The password only went to vexalo.localhost, which the site or a known login provider owns."
+  },
+  "action_taken": "none",
+  "untested": [
+    "No credential exfiltration to a third-party host was observed; password only went to vexalo.localhost as H4 notes.",
+    "I could not verify whether vexalo.localhost is the legitimate brand's infrastructure from the sandbox alone."
+  ]
+}

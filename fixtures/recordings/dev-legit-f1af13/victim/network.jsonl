@@ -1,0 +1,2 @@
+{"ts": 1795781700.290868, "method": "GET", "url": "http://vexalo.localhost:8081/", "host": "vexalo.localhost", "resourceType": "document", "postData": null}
+{"ts": 1795781798.151, "method": "POST", "url": "http://vexalo.localhost:8081/login", "host": "vexalo.localhost", "resourceType": "document", "postData": "email=linus.holm.60be7d%40lake-mail.com&password=ctSHcXnGg6sK2eC%21"}

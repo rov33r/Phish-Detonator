@@ -1,0 +1,94 @@
+{
+  "verdict": "Phishing",
+  "reasons": [
+    {
+      "signal": "S1",
+      "text": "I sent the decoy password and it went to cdn-metrics.localhost, which Vexalo does not own and is not a login provider.",
+      "evidence": [
+        "victim_mobile-3/network.jsonl:7"
+      ]
+    },
+    {
+      "signal": "S2",
+      "text": "The scanner saw 'Stockholm news' with no login form, while my victim visit reached a password form.",
+      "evidence": [
+        "robot/robot.json",
+        "victim_mobile-3/agent.jsonl:4"
+      ]
+    },
+    {
+      "signal": "S4",
+      "text": "The login page shows Vexalo, but vexalo-docs.localhost does not belong to Vexalo.",
+      "evidence": [
+        "victim_mobile-3/brand.json",
+        "victim_mobile-3/agent.jsonl:6"
+      ]
+    },
+    {
+      "signal": "M4",
+      "text": "After taking the password the page sent me to the real Vexalo site (vexalo.localhost).",
+      "evidence": [
+        "victim_mobile-3/navigations.jsonl:4"
+      ]
+    },
+    {
+      "signal": "M1",
+      "text": "I had to get past a gate before the login form.",
+      "evidence": [
+        "victim_mobile-3/agent.jsonl:2"
+      ]
+    },
+    {
+      "signal": "M5",
+      "text": "The page tried to reach internal addresses; the network lock blocked it.",
+      "evidence": [
+        "victim_mobile-3/blocked.jsonl:1",
+        "victim_mobile-3/blocked.jsonl:2",
+        "victim_mobile-3/blocked.jsonl:3"
+      ]
+    },
+    {
+      "signal": "S3",
+      "text": "The page read webdriver to check for bots.",
+      "evidence": [
+        "victim/probes.jsonl:1",
+        "victim_mobile-3/probes.jsonl:1"
+      ]
+    }
+  ],
+  "rejected_claims": [],
+  "decoy": {
+    "email": "alva.nyman.9645bb@meadow-mail.com",
+    "password_masked": "pu**************"
+  },
+  "robot_final_url": "http://vexalo-docs.localhost:8081/news",
+  "victim_login_host": "vexalo-docs.localhost",
+  "brand_shown": "Vexalo",
+  "password_sent_to": [
+    "cdn-metrics.localhost"
+  ],
+  "email_shared_with": [],
+  "blocked_requests": [
+    {
+      "host": "127.0.0.1",
+      "url": "http://127.0.0.1:443/"
+    },
+    {
+      "host": "169.254.169.254",
+      "url": "http://169.254.169.254/latest/meta-data/"
+    },
+    {
+      "host": "172.30.0.1",
+      "url": "http://172.30.0.1:8000/api/health"
+    }
+  ],
+  "h4": {
+    "status": "refuted",
+    "reason": "Could cdn-metrics.localhost be a legitimate login service? It is not on the login page's site, Vexalo does not own it, and it is not a known login provider. Refuted."
+  },
+  "action_taken": "blocked",
+  "untested": [
+    "I could not test region gating; device gating was tested and supported H5.",
+    "I did not test further decoy submissions or retest the /m/ path with other phone user agents."
+  ]
+}
