@@ -13,9 +13,11 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
+      # Steps below skip until Lane A adds sandbox/Dockerfile.
       - uses: actions/checkout@v4
 
       - name: Install gVisor
+        if: hashFiles('sandbox/Dockerfile') != ''
         run: |
           curl -fsSL https://gvisor.dev/archive.key | sudo gpg --dearmor -o /usr/share/keyrings/gvisor-archive-keyring.gpg
           echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/gvisor-archive-keyring.gpg] https://storage.googleapis.com/gvisor/releases release main" | sudo tee /etc/apt/sources.list.d/gvisor.list
@@ -24,9 +26,11 @@ jobs:
           sudo systemctl restart docker
 
       - name: Build pd-sandbox
+        if: hashFiles('sandbox/Dockerfile') != ''
         run: docker build -t pd-sandbox:latest sandbox/
 
       - name: Start under gVisor as the pd user
+        if: hashFiles('sandbox/Dockerfile') != ''
         run: docker run --rm --runtime=runsc --user 10001:10001 --entrypoint node pd-sandbox:latest -e "console.log('node ok')"
 
       - name: Robot visit smoke test (once bot.mjs exists)
