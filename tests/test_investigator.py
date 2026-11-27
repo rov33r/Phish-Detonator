@@ -230,3 +230,16 @@ def test_h4_and_unknown_updates_are_dropped(scan):
                                        {"id": "H9", "status": "open", "reason": "x", "evidence": []}])
     check(s)
     assert s["updates"] == []
+
+
+def test_signal_text_in_claim_maps_back_to_id(scan):
+    text = "I sent the decoy password and it went to cdn-metrics"
+    check = inv._validator(scan, {"H2"}, set(), inv.TOOLS, {}, {text: "S1"})
+    s = step("conclude", action="block", claims=[{"hypothesis": "H2", "signal": text, "text": "x",
+                                                   "cite": ["victim/network.jsonl:2"]}])
+    check(s)
+    assert s["claims"][0]["signal"] == "S1"
+
+
+def test_claim_signal_is_an_enum():
+    assert inv.STEP_SCHEMA["properties"]["claims"]["items"]["properties"]["signal"]["enum"][0] == "S1"

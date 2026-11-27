@@ -255,3 +255,11 @@ def test_brand_check_failure_falls_back(tmp_path, monkeypatch):
     monkeypatch.setattr(llm, "vision_json", down)
     scan = write_scan(tmp_path / "s", **kit_scan(), extra={"victim/step-03.png": "png"})
     assert vd.decide("s", scan_dir=scan)["brand_shown"] == "Vexalo"  # from agent brand_seen
+
+
+def test_s4_claim_citing_agent_step_survives_vision_check(tmp_path, monkeypatch):
+    from app import llm
+    monkeypatch.setattr(llm, "vision_json", lambda *a, **k: llm.Reply({"brand": "Vexalo", "confidence": 0.9}, "eye"))
+    scan = write_scan(tmp_path / "s", **kit_scan(), extra={"victim/step-03.png": "png"})
+    r = vd.decide("s", [claim("S4", "victim/agent.jsonl:3")], scan_dir=scan)
+    assert r["rejected_claims"] == []
