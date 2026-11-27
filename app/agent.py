@@ -12,6 +12,7 @@ import os
 import pathlib
 import random
 import re
+import threading
 import time
 from urllib.parse import urlsplit
 
@@ -22,6 +23,7 @@ PLACEHOLDERS = (EMAIL, PASSWORD)
 ACTIONS = ("click", "fill", "press", "scroll", "wait", "done", "give_up")
 KEYS = ("Enter", "Tab")
 MAX_SECONDS = 120
+APPROVAL_TIMEOUT_S = 30  # manual mode: how long the agent waits for an analyst (SPEC 6.6)
 SNAPSHOT_CHARS = 6000
 DOWNLOAD_RE = re.compile(r"\.(exe|msi|zip|rar|7z|iso|dmg|apk|js|vbs|scr|bat|docm|xlsm)(\?|$)", re.I)
 REF_RE = re.compile(r"(?:ref=|@)(e\d+)\b")
@@ -62,6 +64,12 @@ ACTION_SCHEMA = {
 _now = time.monotonic
 _sleep = time.sleep
 _pause = lambda: random.uniform(0.4, 1.2)  # noqa: E731  (SPEC 7 pacing)
+_wait = lambda event, seconds: event.wait(seconds)  # noqa: E731
+
+# Manual approval (SPEC 6.6): one open question per (scan, visit). Scans run as threads in the
+# app process (one uvicorn worker), so the approve endpoint and the agent share this dict.
+_pending: dict[tuple[str, str], dict] = {}
+_pending_lock = threading.Lock()
 
 
 def _exec(container: str, args: list[str], timeout: int = 30) -> tuple[int, str]:
@@ -170,6 +178,59 @@ def approval(typed: list[str], url: str, password_submitted: bool) -> tuple[str,
 
 # ---------- the loop ----------
 
+def manual_approval() -> bool:
+    return os.environ.get("PD_APPROVAL_MODE", "auto").strip().lower() == "manual"
+
+
+def answer(scan_id: str, visit: str, decision: str) -> bool:
+    """The analyst's answer to an open approval_requested. False when nothing is waiting."""
+    if decision not in ("approve", "deny"):
+        raise ValueError(f"unknown decision {decision!r}")
+    with _pending_lock:
+        slot = _pending.get((scan_id, visit))
+        if slot is None or slot["event"].is_set():
+            return False
+        slot["decision"] = decision
+        slot["event"].set()
+        return True
+
+
+def pending(scan_id: str) -> list[str]:
+    """Visits of this scan that are waiting for an analyst."""
+    with _pending_lock:
+        return [v for (s, v), slot in _pending.items() if s == scan_id and not slot["event"].is_set()]
+
+
+def ask_analyst(scan_id: str, visit: str, step: int, url: str, typed: list[str]) -> str:
+    """Pause before the submit until an analyst answers or the timeout passes.
+
+    Returns approved_by_analyst, denied_by_analyst or timed_out (the code policy already approved,
+    so an unattended scan still finishes)."""
+    slot = {"event": threading.Event(), "decision": None}
+    with _pending_lock:
+        _pending[(scan_id, visit)] = slot
+    fields = [name for name, ph in (("email", EMAIL), ("password", PASSWORD)) if ph in typed]
+    try:
+        _emit(scan_id, "approval_requested", {"visit": visit, "step": step, "host": urlsplit(url).hostname or "",
+                                              "fields": fields, "timeout_s": APPROVAL_TIMEOUT_S})
+        answered = _wait(slot["event"], APPROVAL_TIMEOUT_S)
+    finally:
+        with _pending_lock:
+            _pending.pop((scan_id, visit), None)
+    if not answered or slot["decision"] is None:
+        return "timed_out"
+    return "approved_by_analyst" if slot["decision"] == "approve" else "denied_by_analyst"
+
+
+APPROVAL_REASON = {
+    "auto_approved": "The agent only holds placeholders; the host fills in a per-scan decoy, so no real credential can leave.",
+    "denied": "A policy check failed, so the submit is blocked.",
+    "approved_by_analyst": "An analyst approved the submit. Only the per-scan decoy identity leaves the sandbox.",
+    "denied_by_analyst": "An analyst denied the submit, so the agent stops this visit.",
+    "timed_out": f"No analyst answered in {APPROVAL_TIMEOUT_S} s; the code policy approved the decoy submit.",
+}
+
+
 def run_victim(scan_id: str, url: str, container: str, decoy: dict, goal: str | None = None,
                *, visit: str | None = None, max_steps: int | None = None) -> dict:
     """Run one victim visit. Returns the visit summary for the investigator (SPEC 6A.1 step 3)."""
@@ -253,11 +314,16 @@ def run_victim(scan_id: str, url: str, container: str, decoy: dict, goal: str | 
 
             if a["action"] in ("click", "press") and typed:
                 decision, checks = approval(typed, url_now, password_submitted)
+                if decision == "auto_approved" and manual_approval():
+                    decision = ask_analyst(scan_id, visit, n, url_now, typed)
                 _emit(scan_id, "approval", {"visit": visit, "step": n, "action": a["action"], "ref": a.get("ref"),
                                             "typed": list(typed), "checks": checks, "decision": decision,
-                                            "reason": "The agent only holds placeholders; the host fills in a "
-                                                      "per-scan decoy, so no real credential can leave."})
+                                            "reason": APPROVAL_REASON[decision]})
                 last["approval"] = decision
+                if decision == "denied_by_analyst":
+                    stop = "approval_denied"
+                    _record(scan_id, log, last)
+                    break
                 if decision == "denied":
                     history.append(f"{n}. {a['action']} {a.get('ref') or a.get('key')}: denied by the approval gate")
                     _record(scan_id, log, last)
