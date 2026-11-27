@@ -21,6 +21,12 @@ syncThemeControl();
 const form = byId("scan-form");
 const urlInput = byId("url");
 const startButton = byId("scan-button");
+byId("use-swiftparcel-url").addEventListener("click", () => {
+  urlInput.value = new URL("/swiftparcel/", window.location.origin).href;
+  urlInput.dispatchEvent(new Event("input", { bubbles: true }));
+  urlInput.focus();
+  byId("swiftparcel-status").textContent = "SwiftParcel URL added. Press Start scan to investigate the test site.";
+});
 const presets = [...document.querySelectorAll("[data-url]")];
 const workspace = document.querySelector(".workspace");
 const initialWorkspace = workspace.cloneNode(true);

@@ -240,6 +240,11 @@ async def lifespan(application):
 
 app = FastAPI(lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
+app.mount(
+    "/swiftparcel",
+    StaticFiles(directory=ROOT.parent / "demo-sites" / "swiftparcel" / "dist", html=True, check_dir=False),
+    name="swiftparcel-demo",
+)
 
 
 class ScanInput(BaseModel):

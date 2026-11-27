@@ -66,6 +66,21 @@ main.wrap { flex: 1; display: flex; flex-direction: column; }
 .welcome-mark span + span { translate: .25rem .25rem; background: var(--wash); }
 h1 { font-size: clamp(1.85rem, 4.5vw, 2.85rem); font-weight: 750; letter-spacing: -.04em; line-height: 1.12; text-wrap: balance; }
 .intro { color: var(--muted); margin-top: .55rem; }
+.test-site-launch {
+  width: min(100%, 36rem); display: flex; align-items: center; gap: .8rem; margin: 1.45rem auto 0;
+  padding: .85rem .95rem; border: 1px solid var(--rule); border-radius: .85rem; background: var(--surface);
+  text-align: start;
+}
+.test-site-mark { width: 2.45rem; height: 2.45rem; flex: none; display: grid; place-items: center; border-radius: .65rem; color: var(--accent); background: var(--wash); }
+.test-site-mark svg { width: 1.45rem; height: 1.45rem; }
+.test-site-copy { min-width: 0; display: grid; gap: .18rem; }
+.test-site-copy strong { color: var(--ink); font-size: .82rem; }
+.test-site-copy span { color: var(--muted); font-size: .69rem; line-height: 1.4; }
+.test-site-actions { display: flex; align-items: center; gap: .75rem; margin-left: auto; }
+.test-site-actions button { min-height: 2.35rem; padding: .3rem .62rem; color: var(--accent); white-space: nowrap; }
+.test-site-actions a { display: inline-flex; align-items: center; gap: .3rem; font-size: .75rem; font-weight: 700; white-space: nowrap; }
+.test-site-actions a svg { width: .9rem; height: .9rem; }
+.test-site-status { min-height: 1.2rem; margin-top: .35rem; color: var(--muted); font-size: .72rem; }
 .conversation { min-width: 0; }
 .exchange, .previous-exchange { padding-top: 1.25rem; scroll-margin-top: .75rem; }
 .prompt-message {
@@ -174,6 +189,9 @@ button[aria-pressed="true"] { color: var(--accent); border-color: var(--accent);
 }
 @media (max-width: 35rem) {
   .wrap, .bar-inner { width: calc(100% - 1.25rem); }
+  .test-site-launch { flex-wrap: wrap; gap: .55rem; padding: .7rem; }
+  .test-site-copy { flex: 1; }
+  .test-site-actions { width: 100%; justify-content: flex-end; margin-left: 0; }
   .scan-form { grid-template-columns: minmax(0, 1fr) auto; }
   .url-field { grid-column: 1 / -1; }
   .compare-stage, .panes, .investigation-body { grid-template-columns: minmax(0, 1fr); }

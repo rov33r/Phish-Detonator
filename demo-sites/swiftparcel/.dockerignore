@@ -1,0 +1,6 @@
+node_modules
+dist
+.prerender
+coverage
+.git
+*.log

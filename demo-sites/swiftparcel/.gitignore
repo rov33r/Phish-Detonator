@@ -1,0 +1,5 @@
+node_modules/
+.prerender/
+coverage/
+*.log
+.DS_Store
