@@ -8,6 +8,7 @@ Every SSE message is `{"id": <event id>, "ts": <ISO 8601>, "type": "<type>", "pa
 |---|---|---|
 | `scan_started` | A | `{url, mode, decoy_email}` |
 | `email_triage` | B | `{links: [{url, shown_text, picked, reason}], flags: [{name, detail}]}` (pasted email, SPEC 11A.6; `picked` links get one investigation each; flags are context: `link_text_mismatch`, `display_name_mismatch`, `reply_to_differs`) |
+| `blocklist_hit` | C | `{url, status: "blocked" or "released", scan_id, verdict, decided_by: "agent" or "analyst", decided_at}` (emitted at scan start when the link was decided in an earlier scan; the new scan still runs. `GET /api/blocklist` returns `{entries: [same shape]}`, newest first; `POST /api/email-preview` adds `blocklist` (same shape or null) to each link) |
 | `scan_queued` | A | `{position}` (waiting for a free slot, SPEC 10) |
 | `plan` | B | `{hypotheses: [{id, text, status: "open"}], text}` (`text`: one first-person sentence) |
 | `hypothesis_update` | B | `{id, status: "open", "supported" or "refuted", reason, evidence: [cite]}` |
@@ -15,7 +16,7 @@ Every SSE message is `{"id": <event id>, "ts": <ISO 8601>, "type": "<type>", "pa
 | `sandbox_created` | A | `{visit, profile, container, runtime, limits: {memory, cpus, pids, seconds}}` |
 | `robot_done` | A | `{final_url, title, screenshot, has_password_field}` |
 | `agent_step` | B | `{visit, step, action, ref, reason, url, title, is_login_page, brand_seen, model}` (`reason` is first person, max 20 words) |
-| `approval_requested` | B | `{visit, step, host, fields: ["email", "password"], timeout_s: 30}` (manual mode only, SPEC 6.6: the code checks passed and the agent waits for an analyst; the UI shows Approve and Deny with a countdown and answers with `POST /api/scans/{id}/approve` `{visit, decision: "approve" or "deny"}`) |
+| `approval_requested` | B | `{visit, step, host, fields: ["email", "password"], timeout_s: 60}` (manual mode only, SPEC 6.6: the code checks passed and the agent waits for an analyst; the UI shows Approve and Deny with a countdown and answers with `POST /api/scans/{id}/approve` `{visit, decision: "approve" or "deny"}`) |
 | `approval` | B | `{visit, step, action, ref, typed: ["{{DECOY_EMAIL}}", "{{DECOY_PASSWORD}}"], checks: [{name, ok}], decision, reason}` (SPEC 6.6; never the decoy value itself). `decision`: `auto_approved` or `denied` (auto mode, or a failed check); `approved_by_analyst`, `denied_by_analyst` or `timed_out` (manual mode; on `timed_out` the code policy approved the submit because nobody answered) |
 | `screenshot` | B | `{visit, step, path}` |
 | `request_seen` | A | `{visit, method, host, url}` |

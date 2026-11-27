@@ -23,7 +23,7 @@ PLACEHOLDERS = (EMAIL, PASSWORD)
 ACTIONS = ("click", "fill", "press", "scroll", "wait", "done", "give_up")
 KEYS = ("Enter", "Tab")
 MAX_SECONDS = 120
-APPROVAL_TIMEOUT_S = 30  # manual mode: how long the agent waits for an analyst (SPEC 6.6)
+APPROVAL_TIMEOUT_S = 60  # manual mode: how long the agent waits for an analyst (SPEC 6.6)
 SNAPSHOT_CHARS = 6000
 DOWNLOAD_RE = re.compile(r"\.(exe|msi|zip|rar|7z|iso|dmg|apk|js|vbs|scr|bat|docm|xlsm)(\?|$)", re.I)
 REF_RE = re.compile(r"(?:ref=|@)(e\d+)\b")
