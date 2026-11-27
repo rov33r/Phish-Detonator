@@ -30,6 +30,14 @@ const sandboxRows = new Map();
 const stepReasons = new Map();
 const observedHosts = new Map();
 const thirdPartyHosts = new Set();
+const approvalCards = new Map();
+const approvalOutcomes = {
+  auto_approved: "Auto-approved by the code policy",
+  denied: "Denied by the code policy",
+  approved_by_analyst: "Approved by analyst",
+  denied_by_analyst: "Denied by analyst",
+  timed_out: "No answer in time; the code policy approved",
+};
 let scanId;
 let source;
 let lastEvent = 0;
@@ -367,9 +375,73 @@ const render = {
     byId("agent-step").textContent = p.reason;
     activity(event, `${p.visit} · Step ${p.step} · ${p.action}`, `${p.reason} · ${p.model}`);
   },
+  approval_requested(event, p) {
+    closeApproval(p.visit);
+    byId("approval-stage").hidden = false;
+    const card = element("article", "", "approval-card");
+    const title = element("p", "", "approval-title");
+    title.append("The agent wants to submit the decoy login on ", element("strong", p.host || "this page"));
+    const note = element(
+      "p",
+      `${browserLabel(p.visit)} · Step ${p.step} · Only this scan's decoy ${(p.fields ?? []).join(" and ")} can be typed. Where the password really goes appears in the password trail.`,
+      "subtle",
+    );
+    const countdown = element("p", "", "approval-countdown");
+    const buttons = element("div", "", "decisions");
+    const approve = element("button", "Approve", "primary");
+    const deny = element("button", "Deny");
+    approve.type = deny.type = "button";
+    buttons.append(approve, deny);
+    const result = element("p", "", "subtle");
+    result.setAttribute("role", "status");
+    card.append(title, note, countdown, buttons, result);
+    byId("approvals").append(card);
+    const entry = { card, timer: undefined };
+    approvalCards.set(p.visit, entry);
+    const deadline = Date.now() + (Number(p.timeout_s) || 30) * 1000;
+    const tick = () => {
+      const left = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+      countdown.textContent = left ? `${left} s to answer` : "No answer; the code policy decides";
+      if (!left) {
+        clearInterval(entry.timer);
+        approve.disabled = deny.disabled = true;
+      }
+    };
+    tick();
+    entry.timer = setInterval(tick, 250);
+    if (playback) {
+      approve.disabled = deny.disabled = true;
+      result.textContent = "Recorded run: the answer was given at the time.";
+    }
+    const answer = async (decision) => {
+      approve.disabled = deny.disabled = true;
+      result.textContent = "Sending…";
+      try {
+        const response = await fetch(`/api/scans/${scanId}/approve`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ visit: p.visit, decision }),
+        });
+        result.textContent = response.ok
+          ? `${decision === "approve" ? "Approval" : "Denial"} sent. Waiting for the agent.`
+          : "This visit is no longer waiting.";
+      } catch {
+        result.textContent = "Could not reach the server. The code policy decides on timeout.";
+      }
+    };
+    approve.addEventListener("click", () => answer("approve"));
+    deny.addEventListener("click", () => answer("deny"));
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    card.scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "center" });
+    activity(event, `${p.visit} · Step ${p.step} · Approval requested`, `Submit on ${p.host || "this page"}`);
+  },
   approval(event, p) {
-    const outcome = p.decision === "auto_approved" ? "Auto-approved" : "Denied";
-    setVisitState(p.visit, outcome, "running");
+    closeApproval(p.visit);
+    const outcome = approvalOutcomes[p.decision] ?? p.decision;
+    byId("approval-stage").hidden = false;
+    appendRow("approval-outcomes", element("strong", `${browserLabel(p.visit)} · ${outcome}`), element("span", p.reason ?? "", "subtle"));
+    const denied = p.decision === "denied" || p.decision === "denied_by_analyst";
+    setVisitState(p.visit, denied ? "Submit denied" : "Submit approved", "running");
     activity(event, `${p.visit} · Step ${p.step} · ${outcome}`, p.reason);
   },
   screenshot(event, p) {
@@ -491,8 +563,29 @@ const render = {
   },
 };
 
+function browserLabel(visit) {
+  const name = String(visit ?? "");
+  if (name.startsWith("victim_mobile")) return "Phone browser";
+  if (name.startsWith("victim")) return "Desktop browser";
+  if (name.startsWith("robot")) return "Scanner browser";
+  return name;
+}
+
+function closeApproval(visit) {
+  const entry = approvalCards.get(visit);
+  if (!entry) return;
+  clearInterval(entry.timer);
+  entry.card.remove();
+  approvalCards.delete(visit);
+}
+
+function clearApprovals() {
+  for (const visit of [...approvalCards.keys()]) closeApproval(visit);
+}
+
 function stop(message, state) {
   source?.close();
+  clearApprovals();
   status(message, state);
   finishLoading(state);
   for (const family of ["scanner", "victim"]) {
@@ -516,6 +609,7 @@ function reset() {
     byId("conversation-history").append(previous);
   }
   activeResult = undefined;
+  clearApprovals();
   document.querySelector(".workspace").replaceWith(initialWorkspace.cloneNode(true));
   for (const id of counterIds) byId(id).textContent = "0";
   for (const cache of [hypothesisRows, sandboxRows, stepReasons, observedHosts, thirdPartyHosts]) cache.clear();

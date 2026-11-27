@@ -71,6 +71,9 @@ class Scan:
             self.changed.notify_all()
 
 
+DEMO_APPROVAL_TIMEOUT_S = 8
+
+
 def demo_events(url, mode):
     preset = next((key for key, value in PRESETS.items() if value == url), "kit")
     legit = preset == "legit"
@@ -153,11 +156,16 @@ def demo_events(url, mode):
         login = f"{victim}/login.png"
         yield "screenshot", {"visit": victim, "step": 2, "path": login}
         host = "cdn-metrics.example" if phishing else "vexalo.example"
+        yield "approval_requested", {
+            "visit": victim, "step": 2, "host": urlsplit(url).hostname or "",
+            "fields": ["email", "password"], "timeout_s": DEMO_APPROVAL_TIMEOUT_S,
+        }
         yield "approval", {
             "visit": victim, "step": 2, "action": "submit", "ref": None,
             "typed": ["{{DECOY_EMAIL}}", "{{DECOY_PASSWORD}}"],
             "checks": [{"name": "Synthetic values only", "ok": True}],
-            "decision": "auto_approved", "reason": "The simulated submission uses only decoy placeholders.",
+            "decision": "timed_out",
+            "reason": "No analyst answer in the simulation; the code policy approved a decoy-only submit.",
         }
         if phishing:
             trail.append(host)
@@ -219,6 +227,9 @@ async def play_demo(scan, delay):
                     scan.decision = "block"
                     scan.decided_by = "agent"
             await scan.emit(event_type, payload)
+            if event_type == "approval_requested" and delay:
+                # Hold so the approval card stays on screen for its countdown.
+                await asyncio.sleep(payload["timeout_s"])
     finally:
         async with scan.changed:
             scan.status = "finished" if scan.verdict else "failed"

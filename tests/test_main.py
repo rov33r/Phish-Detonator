@@ -53,7 +53,14 @@ def test_simulation_outcomes(client, preset, expected):
         assert "S1" in {reason["signal"] for reason in verdict["reasons"]}
         assert verdict["password_sent_to"] == ["cdn-metrics.example"]
         approval = next(event["payload"] for event in events if event["type"] == "approval")
-        assert approval["decision"] == "auto_approved"
+        assert approval["decision"] == "timed_out"
+        types = [event["type"] for event in events]
+        request = next(event["payload"] for event in events if event["type"] == "approval_requested")
+        assert types.index("approval_requested") < types.index("approval")
+        assert request["visit"] == approval["visit"]
+        assert request["host"] == "vexalo-docs.example"
+        assert request["fields"] == ["email", "password"]
+        assert request["timeout_s"] > 0
         assert approval["typed"] == ["{{DECOY_EMAIL}}", "{{DECOY_PASSWORD}}"]
         assert all(
             {"visit", "model"} <= event["payload"].keys()
