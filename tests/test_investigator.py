@@ -257,3 +257,10 @@ def test_stops_after_two_failed_dispatches(scan, model):
     result = inv.investigate("s1", summaries(scan), lambda s: calls.append(s) or {"visit": "x", "kind": "victim"},
                              scan_dir=scan, max_sandboxes=6)
     assert len(calls) == 2 and "claims" in result
+
+
+def test_plain_drops_ids_for_judges():
+    assert inv.plain("I send a phone to settle H3 (H3).") == "I send a phone to settle the phone question."
+    assert inv.plain("Password left for a collector (S1, M4)") == "Password left for a collector"
+    assert inv.plain("No ids here") == "No ids here"
+    assert all(h["text"].endswith("?") for h in inv.FIXED)
