@@ -35,6 +35,7 @@ Rules:
 - For the email field write exactly {{{{DECOY_EMAIL}}}}. For password fields write exactly {{{{DECOY_PASSWORD}}}}.
 - Never download files. Never type anything else into forms.
 - A submit passes an approval gate. If it says denied, do not retry the same submit.
+- If the page says it only opens on another device, browser or region, answer done and say what it asked for.
 - If no login form appears after the page stops changing, answer done.
 - "reason" is first person, at most 20 words, for example "I tick the checkbox to reach the login".
 Answer with one JSON object only, matching the schema."""
@@ -163,6 +164,16 @@ def run_victim(scan_id: str, url: str, container: str, decoy: dict, goal: str | 
             raise RuntimeError(f"agent-browser {args[0]} failed: {output.strip()[:200]}")
         return output.strip()
 
+    def shot(n: int) -> None:
+        """Screenshots can fail mid-navigation; one retry, then go on without it."""
+        for _ in range(2):
+            try:
+                browser("screenshot", f"/out/step-{n:02d}.png")
+                _emit(scan_id, "screenshot", {"visit": visit, "step": n, "path": f"{visit}/step-{n:02d}.png"})
+                return
+            except RuntimeError:
+                _sleep(1)
+
     start = _now()
     history: list[str] = []
     typed: list[str] = []  # placeholders typed since the last submit
@@ -171,8 +182,7 @@ def run_victim(scan_id: str, url: str, container: str, decoy: dict, goal: str | 
     try:
         browser("open", url, timeout=45)
         _sleep(2)
-        browser("screenshot", "/out/step-00.png")
-        _emit(scan_id, "screenshot", {"visit": visit, "step": 0, "path": f"{visit}/step-00.png"})
+        shot(0)
 
         for n in range(1, max_steps + 1):
             if _now() - start > MAX_SECONDS:
@@ -202,9 +212,11 @@ def run_victim(scan_id: str, url: str, container: str, decoy: dict, goal: str | 
             last = {"visit": visit, "step": n, "action": a["action"], "ref": a.get("ref"),
                     "text": a.get("text"), "key": a.get("key"), "reason": a.get("reason", ""),
                     "url": url_now, "title": title, "is_login_page": bool(a.get("is_login_page")),
-                    "brand_seen": a.get("brand_seen"), "model": model, "password_field": password_field}
+                    "brand_seen": a.get("brand_seen"), "model": model, "password_field": password_field,
+                    "page": snapshot[:600]}
 
             if a["action"] in ("done", "give_up"):
+                last["ref"] = None
                 stop = a["action"]
                 _record(scan_id, log, last)
                 break
@@ -237,8 +249,7 @@ def run_victim(scan_id: str, url: str, container: str, decoy: dict, goal: str | 
             elif a["action"] == "wait":
                 _sleep(1.5)
 
-            browser("screenshot", f"/out/step-{n:02d}.png")
-            _emit(scan_id, "screenshot", {"visit": visit, "step": n, "path": f"{visit}/step-{n:02d}.png"})
+            shot(n)
             _record(scan_id, log, last)
             history.append(f"{n}. {a['action']} {a.get('ref') or a.get('key') or ''} {a.get('text') or ''}: "
                            f"{a.get('reason', '')}".strip())

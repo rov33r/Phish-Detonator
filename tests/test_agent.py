@@ -194,3 +194,15 @@ def test_make_decoy_is_unique_and_well_formed():
     assert re.fullmatch(r"[a-z]+\.[a-z]+\.[0-9a-f]{6}@[a-z]+-mail\.com", a["email"])
     pw = a["password"]
     assert len(pw) == 16 and sum(c in "!#%*" for c in pw) == 1
+
+
+def test_failed_screenshot_does_not_end_visit(rig, monkeypatch):
+    real = rig["browser"]
+
+    def flaky(container, args, timeout=30):
+        if args[4] == "screenshot" and args[5].endswith("step-06.png"):
+            return 1, "Not attached to an active page"
+        return real(container, args, timeout)
+    monkeypatch.setattr(agent, "_exec", flaky)
+    summary = run(rig, KIT_SCRIPT)
+    assert summary["stop_reason"] == "done" and summary["steps"] == 7
