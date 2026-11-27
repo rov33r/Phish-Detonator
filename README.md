@@ -4,7 +4,7 @@
 
 Phish Detonator sends a scanner-like robot and a person-like browser into disposable gVisor sandboxes on Vultr, follows the decoy password to wherever it goes, asks a human before its one irreversible action, and blocks the link with evidence that code verifies.
 
-**Live demo:** https://app.70-34-206-32.sslip.io · **Video:** _link_ · Built for the Vultr Agent Runtime Hackathon, Stockholm, 27 November 2026.
+**Live demo:** https://app.70-34-206-32.sslip.io · **Video:** [Google Drive](https://drive.google.com/drive/folders/1xfDBcep9WmXTRAHVch4B4VDQGBsDeuiC?usp=sharing) · Built for the Vultr Agent Runtime Hackathon, Stockholm, 27 November 2026.
 
 ![L1 system context: the analyst, Phish Detonator, the suspicious website, Vultr Serverless Inference and Vultr Cloud Compute](docs/images/l1-system-context.png)
 
