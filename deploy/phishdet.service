@@ -1,0 +1,17 @@
+[Unit]
+Description=Phish Detonator app
+After=docker.service phishdet-netlock.service
+Requires=docker.service phishdet-netlock.service
+
+[Service]
+WorkingDirectory=/opt/phishdet
+EnvironmentFile=/etc/phishdet/env
+EnvironmentFile=-/etc/phishdet/app.env
+Environment=PD_SCANS_DIR=/var/lib/phishdet/scans
+Environment=PD_DB=/var/lib/phishdet/scans/pd.db
+ExecStart=/opt/phishdet/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

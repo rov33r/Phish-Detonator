@@ -1,0 +1,9 @@
+# install.sh replaces PD_IP with PD_PUBLIC_IP_DASHED from /etc/phishdet/env.
+# The app gets HTTPS. Test sites stay on plain http: the netlock lets sandboxes reach the host on port 80 only.
+app.PD_IP.sslip.io {
+	reverse_proxy 127.0.0.1:8000
+}
+
+http://*.PD_IP.nip.io, http://*.PD_IP.sslip.io {
+	reverse_proxy 127.0.0.1:8081
+}
