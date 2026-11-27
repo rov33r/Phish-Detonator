@@ -179,6 +179,7 @@ def run_victim(scan_id: str, url: str, container: str, decoy: dict, goal: str | 
     out.mkdir(parents=True, exist_ok=True)
     log = (out / "agent.jsonl").open("a")
     real = {EMAIL: decoy["email"], PASSWORD: decoy["password"]}
+    watcher = ContainmentWatcher(scan_id, visit, out)
     system = SYSTEM_PROMPT.format(goal=f"\nExtra goal: {goal[:120]}" if goal else "")
 
     def browser(*args: str, timeout: int = 30) -> str:
@@ -285,6 +286,7 @@ def run_victim(scan_id: str, url: str, container: str, decoy: dict, goal: str | 
                 _sleep(1.5)
 
             shot(n)
+            watcher.poll()
             _record(scan_id, log, last)
             history.append(f"{n}. {a['action']} {a.get('ref') or a.get('key') or ''} {a.get('text') or ''}: "
                            f"{a.get('reason', '')}".strip())
@@ -293,6 +295,7 @@ def run_victim(scan_id: str, url: str, container: str, decoy: dict, goal: str | 
         _emit(scan_id, "error", {"where": f"agent:{visit}", "message": str(e)[:300]})
     finally:
         log.close()
+        watcher.poll()
 
     sent = _decoy_sent(scan_id, visit, out, decoy)
     return {
@@ -303,6 +306,30 @@ def run_victim(scan_id: str, url: str, container: str, decoy: dict, goal: str | 
         "decoy_sent_to": sorted({s["host"] for s in sent if s["field"] == "password"}),
         "email_sent_to": sorted({s["host"] for s in sent if s["field"] == "email"}),
     }
+
+
+class ContainmentWatcher:
+    """Turns the recorder's blocked.jsonl and probes.jsonl into live `request_blocked` and
+    `probe_seen` events, so the containment panel moves while the page attacks (SPEC 11, A12)."""
+
+    FILES = {"blocked.jsonl": "request_blocked", "probes.jsonl": "probe_seen"}
+
+    def __init__(self, scan_id: str, visit: str, out: pathlib.Path):
+        self.scan_id, self.visit, self.out = scan_id, visit, out
+        self.seen = {name: 0 for name in self.FILES}
+
+    def poll(self) -> None:
+        from app.verdict import host_of, read_jsonl
+        for name, event in self.FILES.items():
+            rows = read_jsonl(self.out / name)
+            for _, row in rows[self.seen[name]:]:
+                if event == "request_blocked":
+                    payload = {"visit": self.visit, "host": row.get("host") or host_of(row.get("url", "")),
+                               "url": row.get("url"), "error": row.get("error", "")}
+                else:
+                    payload = {"visit": self.visit, "name": row.get("name")}
+                _emit(self.scan_id, event, payload)
+            self.seen[name] = len(rows)
 
 
 def _record(scan_id: str, log, line: dict) -> None:
