@@ -1,0 +1,12 @@
+[Unit]
+Description=Phish Detonator sandbox network lock (SPEC 5.7)
+After=docker.service ufw.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/bash /opt/phishdet/deploy/netlock.sh
+
+[Install]
+WantedBy=multi-user.target

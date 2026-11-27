@@ -1,0 +1,13 @@
+[Unit]
+Description=Phish Detonator test sites (Vexalo kit, legit site, collector)
+After=network.target
+
+[Service]
+WorkingDirectory=/opt/phishdet
+EnvironmentFile=/etc/phishdet/env
+ExecStart=/opt/phishdet/.venv/bin/uvicorn fixtures.app:app --host 127.0.0.1 --port 8081
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
