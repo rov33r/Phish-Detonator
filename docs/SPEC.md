@@ -300,7 +300,7 @@ Budget: at most `PD_INVESTIGATOR_MAX_SANDBOXES` (default 5) sandboxes per scan i
 Each `cite` is `<visit>/<file>:<line>` or `<visit>/step-NN.png`. Section 8.4 says how claims are checked.
 
 ### 6A.4 Mobile profile
-Same image and victim agent; env `PD_PROFILE=victim_mobile`. Before the first navigation the recorder sets, through CDP: `Emulation.setUserAgentOverride` (Chrome on Android user agent, `platform` Android), `Emulation.setDeviceMetricsOverride` (412x915, `deviceScaleFactor` 2.625, `mobile: true`), `Emulation.setTouchEmulationEnabled` (`maxTouchPoints` 5). Known limit: a desktop Chrome engine with a mobile user agent can be detected by deep fingerprinting.
+Same image and victim agent; env `PD_PROFILE=victim_mobile`. Before the first navigation the recorder sets, through CDP: `Emulation.setUserAgentOverride` (Chrome on Android user agent, `platform` Android), `Emulation.setDeviceMetricsOverride` (412x915, `deviceScaleFactor` 2.625, `mobile: true`), `Emulation.setTouchEmulationEnabled` (`maxTouchPoints` 5). Known limit: a desktop Chrome engine with a mobile user agent can be detected by deep fingerprinting. Set `navigator.maxTouchPoints` (5) with an init script, not only CDP: a CDP override on a new tab races the first navigation, so the page's own check still sees 0 (found in the dev runner). Pass the mobile user agent as a Chrome flag (`--user-agent`) too.
 
 ### 6A.5 Fallback
 If the planner fails two calls in a row, the host skips round 2 and builds claims directly from the rules (8.4). A scan always ends with a verdict. The UI shows "Planner unavailable, rules only".
