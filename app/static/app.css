@@ -245,6 +245,13 @@ button[aria-pressed="true"] { color: var(--accent); border-color: var(--accent);
 .email-triage h2 { font-size: 1rem; }
 .email-input[open] { max-height: min(40dvh, 17rem); overflow-y: auto; }
 
+.approval-stage { scroll-margin-top: 5rem; }
+.approval-card { border: 2px solid var(--accent); border-radius: 8px; background: var(--wash); padding: .85rem 1rem; margin-bottom: .6rem; scroll-margin-top: 5rem; }
+.approval-title { font-size: 1.05rem; margin: 0 0 .3rem; overflow-wrap: anywhere; }
+.approval-countdown { font-variant-numeric: tabular-nums; font-weight: 600; color: var(--accent); margin: .45rem 0 0; }
+.approval-card .decisions button { min-width: 6.5rem; }
+#approval-outcomes .subtle { display: block; }
+
 [data-capture-only="true"] .scan-stages,
 [data-capture-only="true"] .compare-controls,
 [data-capture-only="true"] .compare-picture--victim,
