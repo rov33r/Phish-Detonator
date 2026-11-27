@@ -4,19 +4,21 @@ import asyncio
 import json
 import os
 import re
+import threading
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Literal
+from urllib.parse import urlsplit, urlunsplit
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
+from fastapi.responses import FileResponse, PlainTextResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, HttpUrl
 
-from app import db, scoreboard
+from app import db, orchestrator, passive_capture, scoreboard
 from app.email_intake import extract_links, flags
 
 ROOT = Path(__file__).resolve().parent
@@ -49,6 +51,10 @@ class Scan:
     url: str
     mode: str
     status: str = "running"
+    capture_only: bool = False
+    screenshot: bytes | None = None
+    http_status: int | None = None
+    access_gate: str | None = None
     verdict: dict | None = None
     decision: str | None = None
     decided_by: str | None = None
@@ -218,12 +224,38 @@ async def play_demo(scan, delay):
             scan.changed.notify_all()
 
 
+async def play_capture(scan, state):
+    try:
+        await scan.emit("scan_started", {"url": scan.url, "mode": scan.mode, "decoy_email": None})
+        final_url, title, scan.screenshot, scan.http_status = await asyncio.to_thread(
+            passive_capture.capture_url, scan.url,
+        )
+        destination = urlsplit(final_url)
+        host = destination.hostname or ""
+        if ((host == "cloudflareaccess.com" or host.endswith(".cloudflareaccess.com"))
+                and destination.path.startswith("/cdn-cgi/access/")):
+            scan.access_gate = "cloudflare"
+        visible_url = urlunsplit((destination.scheme, destination.netloc, destination.path, "", ""))
+        await scan.emit("robot_done", {
+            "final_url": visible_url, "title": title, "screenshot": "robot/final.png",
+            "has_password_field": None,
+        })
+    except passive_capture.CaptureError as error:
+        await scan.emit("error", {"where": "capture", "message": str(error)})
+    finally:
+        async with scan.changed:
+            scan.status = "finished" if scan.screenshot is not None else "failed"
+            scan.changed.notify_all()
+        state.active_captures -= 1
+
+
 @asynccontextmanager
 async def lifespan(application):
     application.state.scans = {}
     application.state.tasks = set()
     application.state.demo = os.getenv("PD_FEATURE_FAKE_SCAN") == "1"
     application.state.delay = 0.38
+    application.state.active_captures = 0
     yield
     tasks = list(application.state.tasks)
     for task in tasks:
@@ -282,7 +314,7 @@ def recorded_events(scan_id):
 
 
 def public_record(scan_id, record):
-    allowed = ("url", "mode", "status", "verdict", "decision", "decided_by")
+    allowed = ("url", "mode", "status", "verdict", "decision", "decided_by", "capture_only", "http_status", "access_gate")
     return {"id": scan_id, **{key: record[key] for key in allowed if key in record}}
 
 
@@ -290,6 +322,16 @@ def configured_recordings():
     pairs = (part.partition("=") for part in os.getenv("PD_DEMO_SCANS", "").split(","))
     return {label.strip(): identifier.strip() for label, sep, identifier in pairs
             if sep and re.fullmatch(r"[a-zA-Z0-9_-]{1,80}", identifier.strip())}
+
+
+def orchestrator_enabled(url: str) -> bool:
+    """Only run the active browser workflow against explicitly authorized hosts."""
+    if os.getenv("PD_FEATURE_ORCHESTRATOR") != "1":
+        return False
+    host = (urlsplit(url).hostname or "").lower().rstrip(".")
+    allowed = {item.strip().lower().rstrip(".") for item in os.getenv("PD_ACTIVE_SCAN_HOSTS", "").split(",")
+               if item.strip()}
+    return bool(host and host in allowed)
 
 
 @app.get("/")
@@ -300,26 +342,59 @@ async def index():
 @app.get("/api/health")
 async def health(request: Request):
     return {"ok": True, "model": os.getenv("PD_MODEL"), "runtime": os.getenv("PD_RUNTIME", "runsc"),
-            "demo": getattr(request.app.state, "demo", False), "recordings": configured_recordings()}
+            "demo": getattr(request.app.state, "demo", False), "recordings": configured_recordings(),
+            "scoreboard_enabled": os.getenv("PD_FEATURE_ORCHESTRATOR") == "1"
+            and bool(os.getenv("PD_PUBLIC_IP_DASHED"))}
 
 
 @app.post("/api/scans", status_code=202)
 async def start_scan(body: ScanInput, request: Request):
     state = request.app.state
-    if not state.demo:
+    url = str(body.url)
+    demo = url in PRESETS.values()
+    if demo and not state.demo:
         raise HTTPException(503, "Simulated scans are disabled")
+    active = not demo and orchestrator_enabled(url)
+    if not demo and state.active_captures >= 2:
+        if not active:
+            raise HTTPException(429, "Two screenshots are in progress. Try again shortly.")
+    if not demo and not active and body.mode != "standard":
+        raise HTTPException(422, "Public link screenshots use Standard mode.")
     scan_id = uuid4().hex
-    scan = Scan(str(body.url), body.mode)
+    if active:
+        client_ip = request.client.host if request.client else None
+        await asyncio.to_thread(db.update_scan, scan_id, url=url, mode=body.mode, status="queued",
+                                client_ip=client_ip)
+        thread = threading.Thread(target=orchestrator.run_scan, args=(scan_id, url, body.mode), daemon=True)
+        thread.start()
+        return {"scan_id": scan_id, "queued_position": None, "capture_only": False}
+    scan = Scan(url, body.mode, capture_only=not demo)
+    completed_captures = [key for key, previous in state.scans.items()
+                          if previous.capture_only and previous.status != "running"]
+    for expired in completed_captures[:-19]:
+        del state.scans[expired]
     state.scans[scan_id] = scan
-    task = asyncio.create_task(play_demo(scan, state.delay))
+    if demo:
+        job = play_demo(scan, state.delay)
+    else:
+        state.active_captures += 1
+        job = play_capture(scan, state)
+    task = asyncio.create_task(job)
     state.tasks.add(task)
     task.add_done_callback(state.tasks.discard)
-    return {"scan_id": scan_id, "queued_position": None}
+    return {"scan_id": scan_id, "queued_position": None, "capture_only": scan.capture_only}
 
 
 @app.get("/api/scoreboard")
 def saved_scoreboard():
     return scoreboard.latest()
+
+
+@app.post("/api/scoreboard")
+async def run_scoreboard(request: Request):
+    if os.getenv("PD_FEATURE_ORCHESTRATOR") != "1" or not os.getenv("PD_PUBLIC_IP_DASHED"):
+        raise HTTPException(503, "The owned fixture scoreboard is not configured")
+    return await asyncio.to_thread(scoreboard.run)
 
 
 @app.get("/replay/{scan_id}")
@@ -435,7 +510,7 @@ async def scan_events(scan_id: str, request: Request, after: int = 0):
 @app.post("/api/scans/{scan_id}/decision")
 async def decide(scan_id: str, body: DecisionInput, request: Request):
     scan = demo_scan(request, scan_id)
-    if scan is None:
+    if scan is None or scan.capture_only:
         raise HTTPException(404, "Editable scan not found")
     if scan.verdict is None:
         raise HTTPException(409, "Wait for the verdict before making a decision")
@@ -465,6 +540,10 @@ async def evidence(scan_id: str, path: str, request: Request):
             raise HTTPException(404, "Evidence not found")
         return FileResponse(candidate, media_type=media[relative.suffix],
                             headers={"X-Content-Type-Options": "nosniff"})
+    if scan.capture_only:
+        if path != "robot/final.png" or scan.screenshot is None:
+            raise HTTPException(404, "Evidence not found")
+        return Response(scan.screenshot, media_type="image/png", headers={"Cache-Control": "no-store"})
     disclosed = any(
         path in (event["payload"].get("path"), event["payload"].get("screenshot"))
         or any(cite.split(":")[0] == path for cite in event["payload"].get("evidence", []))

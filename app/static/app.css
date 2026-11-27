@@ -244,3 +244,12 @@ button[aria-pressed="true"] { color: var(--accent); border-color: var(--accent);
 .email-triage { border-bottom: 1px solid var(--rule); padding-top: .65rem; }
 .email-triage h2 { font-size: 1rem; }
 .email-input[open] { max-height: min(40dvh, 17rem); overflow-y: auto; }
+
+[data-capture-only="true"] .scan-stages,
+[data-capture-only="true"] .compare-controls,
+[data-capture-only="true"] .compare-picture--victim,
+[data-capture-only="true"] .pane + .pane,
+[data-capture-only="true"] .detection,
+[data-capture-only="true"] .disclosure,
+[data-capture-only="true"] .counts { display: none; }
+[data-capture-only="true"] .panes { grid-template-columns: minmax(0, 1fr); }
